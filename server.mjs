@@ -3,7 +3,6 @@ import { Readable } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { extname, join } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 
 const PORT = Number(process.env.PORT || 3000);
 const VENICE_BASE = "https://api.venice.ai/api/v1";
@@ -11,9 +10,11 @@ const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const MEDIA_TTL_MS = 15 * 60 * 1000;
 const DATA_DIR = join(process.cwd(), "data");
 const VIDEO_DIR = join(DATA_DIR, "videos");
-const databasePath = join(DATA_DIR, "roam.sqlite");
+const JOBS_FILE = join(DATA_DIR, "jobs.json");
 const uploads = new Map();
+const jobs = new Map();
 const activeMonitors = new Set();
+let pendingJobWrite = Promise.resolve();
 
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
@@ -21,38 +22,48 @@ const validDurations = new Set(["5s", "10s"]);
 const validRatios = new Set(["9:16", "16:9", "1:1"]);
 
 await mkdir(VIDEO_DIR, { recursive: true });
-const db = new DatabaseSync(databasePath);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS jobs (
-    queue_id TEXT PRIMARY KEY,
-    access_token TEXT NOT NULL,
-    model TEXT NOT NULL,
-    download_url TEXT,
-    status TEXT NOT NULL,
-    average_execution_time INTEGER,
-    execution_duration INTEGER,
-    video_path TEXT,
-    error_message TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )
-`);
 
-const getJob = db.prepare("SELECT * FROM jobs WHERE queue_id = ?");
-const getOwnedJob = db.prepare("SELECT * FROM jobs WHERE queue_id = ? AND access_token = ?");
-const createJob = db.prepare(`
-  INSERT INTO jobs (queue_id, access_token, model, download_url, status, created_at, updated_at)
-  VALUES (?, ?, ?, ?, 'QUEUED', ?, ?)
-`);
-const updateJobProcessing = db.prepare(`
-  UPDATE jobs SET status = ?, average_execution_time = ?, execution_duration = ?, error_message = NULL, updated_at = ?
-  WHERE queue_id = ?
-`);
-const updateJobComplete = db.prepare(`
-  UPDATE jobs SET status = 'COMPLETED', video_path = ?, error_message = NULL, updated_at = ? WHERE queue_id = ?
-`);
-const updateJobError = db.prepare("UPDATE jobs SET status = 'FAILED', error_message = ?, updated_at = ? WHERE queue_id = ?");
-const pendingJobs = db.prepare("SELECT queue_id FROM jobs WHERE status IN ('QUEUED', 'PROCESSING')");
+async function loadJobs() {
+  try {
+    const saved = JSON.parse(await readFile(JOBS_FILE, "utf8"));
+    for (const job of saved) {
+      if (job?.queue_id && job?.access_token && job?.model && job?.status) jobs.set(job.queue_id, job);
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") console.warn("Could not restore saved jobs. Starting with an empty queue.");
+  }
+}
+
+function persistJobs() {
+  const contents = JSON.stringify([...jobs.values()]);
+  pendingJobWrite = pendingJobWrite.catch(() => undefined).then(async () => {
+    const temporary = `${JOBS_FILE}.${randomUUID()}.tmp`;
+    await writeFile(temporary, contents, "utf8");
+    await rename(temporary, JOBS_FILE);
+  });
+  return pendingJobWrite;
+}
+
+async function createJobRecord(job) {
+  jobs.set(job.queue_id, job);
+  await persistJobs();
+}
+
+async function updateJob(queueId, changes) {
+  const existing = jobs.get(queueId);
+  if (!existing) return;
+  jobs.set(queueId, { ...existing, ...changes, updated_at: Date.now() });
+  await persistJobs();
+}
+
+const getJob = (queueId) => jobs.get(queueId);
+const getOwnedJob = (queueId, accessToken) => {
+  const job = jobs.get(queueId);
+  return job?.access_token === accessToken ? job : undefined;
+};
+const pendingJobs = () => [...jobs.values()].filter((job) => ["QUEUED", "PROCESSING"].includes(job.status));
+
+await loadJobs();
 
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -147,7 +158,7 @@ async function saveCompletedVideo(job, video) {
   const temporary = `${destination}.${randomUUID()}.tmp`;
   await writeFile(temporary, video);
   await rename(temporary, destination);
-  updateJobComplete.run(filename, Date.now(), job.queue_id);
+  await updateJob(job.queue_id, { status: "COMPLETED", video_path: filename, error_message: null });
   await finalizeAtVenice(job);
 }
 
@@ -156,7 +167,7 @@ async function monitorJob(queueId) {
   activeMonitors.add(queueId);
   try {
     while (true) {
-      const job = getJob.get(queueId);
+      const job = getJob(queueId);
       if (!job || !["QUEUED", "PROCESSING"].includes(job.status)) return;
       let upstream;
       try {
@@ -167,13 +178,13 @@ async function monitorJob(queueId) {
       }
       const { response, contentType } = upstream;
       if (response.status === 503) {
-        updateJobProcessing.run("PROCESSING", null, null, Date.now(), job.queue_id);
+        await updateJob(job.queue_id, { status: "PROCESSING", average_execution_time: null, execution_duration: null, error_message: null });
         await wait(10_000);
         continue;
       }
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        updateJobError.run(body.error || "Venice could not complete this video.", Date.now(), job.queue_id);
+        await updateJob(job.queue_id, { status: "FAILED", error_message: body.error || "Venice could not complete this video." });
         return;
       }
       if (contentType.startsWith("video/")) {
@@ -184,22 +195,22 @@ async function monitorJob(queueId) {
       if (body.status === "COMPLETED" && job.download_url) {
         const download = await fetch(job.download_url);
         if (!download.ok) {
-          updateJobError.run("The video is ready, but its download link could not be opened.", Date.now(), job.queue_id);
+          await updateJob(job.queue_id, { status: "FAILED", error_message: "The video is ready, but its download link could not be opened." });
           return;
         }
         await saveCompletedVideo(job, Buffer.from(await download.arrayBuffer()));
         return;
       }
       if (body.status === "PROCESSING" || body.status === "QUEUED") {
-        updateJobProcessing.run(body.status, body.average_execution_time || null, body.execution_duration || null, Date.now(), job.queue_id);
+        await updateJob(job.queue_id, { status: body.status, average_execution_time: body.average_execution_time || null, execution_duration: body.execution_duration || null, error_message: null });
         await wait(5_000);
         continue;
       }
-      updateJobError.run(body.error || "Venice returned an unexpected job status.", Date.now(), job.queue_id);
+      await updateJob(job.queue_id, { status: "FAILED", error_message: body.error || "Venice returned an unexpected job status." });
       return;
     }
   } catch (error) {
-    updateJobError.run(error instanceof Error ? error.message : "The background worker stopped unexpectedly.", Date.now(), queueId);
+    await updateJob(queueId, { status: "FAILED", error_message: error instanceof Error ? error.message : "The background worker stopped unexpectedly." });
   } finally {
     activeMonitors.delete(queueId);
   }
@@ -258,7 +269,19 @@ async function handleQueue(req, res) {
   if (response.ok && body.queue_id) {
     const accessToken = randomUUID();
     const now = Date.now();
-    createJob.run(body.queue_id, accessToken, body.model || settings.model, body.download_url || null, now, now);
+    await createJobRecord({
+      queue_id: body.queue_id,
+      access_token: accessToken,
+      model: body.model || settings.model,
+      download_url: body.download_url || null,
+      status: "QUEUED",
+      average_execution_time: null,
+      execution_duration: null,
+      video_path: null,
+      error_message: null,
+      created_at: now,
+      updated_at: now
+    });
     if (input.mediaToken) uploads.delete(input.mediaToken);
     void monitorJob(body.queue_id);
     return json(res, response.status, { queueId: body.queue_id, accessToken });
@@ -271,7 +294,7 @@ function getAuthorizedJob(url) {
   if (!match) return null;
   const accessToken = url.searchParams.get("token");
   if (!accessToken) return { error: "Missing job token." };
-  const job = getOwnedJob.get(match[1], accessToken);
+  const job = getOwnedJob(match[1], accessToken);
   return job ? { job, isFile: url.pathname.endsWith("/file") } : { error: "This job is not available on this device." };
 }
 
@@ -293,7 +316,10 @@ async function handleJobGet(url, res) {
     });
     return true;
   }
-  if (job.status !== "COMPLETED" || !job.video_path) return json(res, 409, { error: "This video is not ready yet." });
+  if (job.status !== "COMPLETED" || !job.video_path) {
+    json(res, 409, { error: "This video is not ready yet." });
+    return true;
+  }
   try {
     const video = await readFile(join(VIDEO_DIR, job.video_path));
     res.writeHead(200, { "Content-Type": "video/mp4", "Content-Length": video.length, "Cache-Control": "private, max-age=31536000" });
@@ -324,6 +350,6 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  for (const job of pendingJobs.all()) void monitorJob(job.queue_id);
+  for (const job of pendingJobs()) void monitorJob(job.queue_id);
   console.log(`Roam is ready at http://localhost:${PORT}`);
 });

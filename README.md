@@ -17,7 +17,7 @@ The API key is held by the Node server and is never delivered to the browser.
 
 ## What continues when the screen goes away
 
-- The server writes each accepted Venice queue ID to `data/roam.sqlite`, then resumes unfinished jobs whenever it starts.
+- The server writes each accepted Venice queue ID to `data/jobs.json`, then resumes unfinished jobs whenever it starts.
 - A background worker polls Venice, downloads a completed MP4, and stores it under `data/videos/` before the browser has to return.
 - The browser saves the active job token in `localStorage`. Returning to the app resumes the job view automatically.
 - Completed clips are stored in IndexedDB, not `localStorage`, because video files are much larger than browser local-storage quotas. The Download action remains available if device storage is refused or cleared.
