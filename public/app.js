@@ -17,6 +17,8 @@ const elements = {
   mediaDetail: $("#media-detail"),
   removeMedia: $("#remove-media"),
   mediaError: $("#media-error"),
+  modelPicker: $("#model-picker"),
+  modelNote: $("#model-note"),
   quoteButton: $("#quote-button"),
   queueButton: $("#queue-button"),
   formError: $("#form-error"),
@@ -28,6 +30,7 @@ const elements = {
   reviewRatio: $("#review-ratio"),
   reviewDuration: $("#review-duration"),
   reviewSource: $("#review-source"),
+  reviewModel: $("#review-model"),
   quotePrice: $("#quote-price"),
   processingTitle: $("#processing-title"),
   processingDetail: $("#processing-detail"),
@@ -38,18 +41,22 @@ const elements = {
   helpButton: $("#help-button"),
   closeHelp: $("#close-help"),
   helpPanel: $("#help-panel"),
-  consentDialog: $("#consent-dialog"),
-  consentForm: $("#consent-form"),
-  consentCheck: $("#consent-check"),
-  confirmConsent: $("#confirm-consent"),
-  consentPolicy: $("#consent-policy"),
   toast: $("#toast")
 };
+
+const fallbackProfiles = [
+  { id: "fast", name: "Fast draft", provider: "LTX Video 2.3 Fast", description: "Quick tests and simple scenes.", supportsText: true, supportsPhoto: true },
+  { id: "movement", name: "Natural movement", provider: "HappyHorse 1.1", description: "People, animals, and lively movement.", supportsText: true, supportsPhoto: true },
+  { id: "cinematic", name: "Cinematic", provider: "Kling O3 Standard", description: "Polished camera work and visual detail.", supportsText: true, supportsPhoto: true },
+  { id: "creative", name: "Creative detail", provider: "Wan 2.7", description: "Expressive scenes led by a detailed prompt.", supportsText: true, supportsPhoto: true }
+];
 
 const state = {
   ratio: "9:16",
   duration: "5s",
   audio: true,
+  profile: "fast",
+  profiles: fallbackProfiles,
   file: null,
   mediaToken: null,
   previewUrl: null,
@@ -66,12 +73,12 @@ const ACTIVE_JOB_KEY = "roam-active-video-job";
 const LATEST_VIDEO_KEY = "roam-latest-video";
 
 function getSettings() {
-  return { prompt: elements.prompt.value.trim(), duration: state.duration, aspectRatio: state.ratio, audio: state.audio, hasImage: Boolean(state.mediaToken) };
+  return { prompt: elements.prompt.value.trim(), profile: state.profile, duration: state.duration, aspectRatio: state.ratio, audio: state.audio, hasImage: Boolean(state.mediaToken) };
 }
 
 function quoteSignature() {
-  const { duration, aspectRatio, audio, hasImage } = getSettings();
-  return JSON.stringify({ duration, aspectRatio, audio, hasImage });
+  const { profile, duration, aspectRatio, audio, hasImage } = getSettings();
+  return JSON.stringify({ profile, duration, aspectRatio, audio, hasImage });
 }
 
 function safeStorage(action) {
@@ -95,7 +102,7 @@ function showReview(name) {
 }
 
 function saveDraft() {
-  const draft = { prompt: elements.prompt.value, ratio: state.ratio, duration: state.duration, audio: state.audio };
+  const draft = { prompt: elements.prompt.value, profile: state.profile, ratio: state.ratio, duration: state.duration, audio: state.audio };
   if (safeStorage(() => localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))) !== null) {
     setText(elements.draftStatus, "Saved on this device");
     window.setTimeout(() => setText(elements.draftStatus, ""), 1600);
@@ -106,12 +113,60 @@ function restoreDraft() {
   const saved = safeStorage(() => JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"));
   if (!saved) return;
   elements.prompt.value = typeof saved.prompt === "string" ? saved.prompt : "";
+  if (fallbackProfiles.some((profile) => profile.id === saved.profile)) state.profile = saved.profile;
   if (["9:16", "16:9", "1:1"].includes(saved.ratio)) state.ratio = saved.ratio;
   if (["5s", "10s"].includes(saved.duration)) state.duration = saved.duration;
   state.audio = saved.audio !== false;
   $("#audio").checked = state.audio;
   syncSettingButtons();
   updatePromptCount();
+}
+
+function selectedProfile() {
+  return state.profiles.find((profile) => profile.id === state.profile) || state.profiles[0];
+}
+
+function profileSupportsCurrentSource(profile) {
+  return state.file ? profile.supportsPhoto !== false : profile.supportsText !== false;
+}
+
+function renderProfiles() {
+  const current = selectedProfile();
+  if (!current) return;
+  elements.modelPicker.replaceChildren();
+  for (const profile of state.profiles) {
+    const button = document.createElement("button");
+    const supported = profileSupportsCurrentSource(profile);
+    button.type = "button";
+    button.dataset.profile = profile.id;
+    button.className = "model-card";
+    button.disabled = !supported;
+    button.setAttribute("aria-pressed", String(profile.id === state.profile));
+    const name = document.createElement("strong");
+    name.textContent = profile.name;
+    const provider = document.createElement("span");
+    provider.className = "model-provider";
+    provider.textContent = profile.provider;
+    const description = document.createElement("span");
+    description.className = "model-description";
+    description.textContent = supported ? profile.description : "This option needs a different starting point.";
+    button.append(name, provider, description);
+    elements.modelPicker.append(button);
+  }
+  elements.modelNote.textContent = `${current.name} uses ${current.provider}. ${current.description}`;
+}
+
+async function loadProfiles() {
+  try {
+    const response = await fetch("/api/video/models", { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !Array.isArray(data.profiles) || data.profiles.length === 0) return;
+    state.profiles = data.profiles;
+    if (!state.profiles.some((profile) => profile.id === state.profile)) state.profile = state.profiles[0].id;
+    renderProfiles();
+  } catch {
+    // The safe local choices remain visible while the server reconnects.
+  }
 }
 
 function updatePromptCount() {
@@ -143,6 +198,7 @@ function cleanMedia() {
   elements.photoInput.value = "";
   elements.cameraInput.value = "";
   setText(elements.mediaError, "");
+  renderProfiles();
   invalidateQuote();
 }
 
@@ -164,6 +220,7 @@ async function selectPhoto(file) {
   if (error) { setText(elements.mediaError, error); return; }
   cleanMedia();
   state.file = file;
+  renderProfiles();
   state.previewUrl = URL.createObjectURL(file);
   elements.previewImage.src = state.previewUrl;
   elements.mediaName.textContent = file.name || "Photo from clipboard";
@@ -239,6 +296,7 @@ function showQuote() {
   elements.reviewRatio.textContent = state.ratio === "9:16" ? "Vertical" : state.ratio === "16:9" ? "Wide" : "Square";
   elements.reviewDuration.textContent = state.duration.replace("s", " seconds");
   elements.reviewSource.textContent = state.mediaToken ? "Your photo" : "Your description";
+  elements.reviewModel.textContent = selectedProfile().name;
   elements.quotePrice.textContent = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(state.quote);
   showReview(elements.reviewQuote);
 }
@@ -272,8 +330,8 @@ async function getQuote(event) {
   }
 }
 
-function queuePayload(consents) {
-  return { ...getSettings(), mediaToken: state.mediaToken, consents };
+function queuePayload() {
+  return { ...getSettings(), mediaToken: state.mediaToken };
 }
 
 function persistActiveJob() {
@@ -290,22 +348,13 @@ function setProcessing(message, detail) {
   elements.processingDetail.textContent = detail;
 }
 
-async function queueVideo(consents) {
+async function queueVideo() {
   if (!state.quote || state.quoteSignature !== quoteSignature()) return getQuote();
   elements.queueButton.disabled = true;
   elements.queueButton.textContent = "Starting video";
   setProcessing("Sending it to Venice.", "Once it is queued, the server keeps watching even if you leave this screen.");
   try {
-    const { response, data } = await requestJson("/api/video/queue", queuePayload(consents));
-    const needsConsent = response.status === 409 && (data.error?.code === "needs_consent" || data.consent_flow === "seedance");
-    if (needsConsent) {
-      showQuote();
-      elements.consentPolicy.textContent = data.consent?.policy_text || "Confirm that you have permission to use every person shown in this image.";
-      elements.consentCheck.checked = false;
-      elements.confirmConsent.disabled = true;
-      elements.consentDialog.showModal();
-      return;
-    }
+    const { response, data } = await requestJson("/api/video/queue", queuePayload());
     if (!response.ok) throw new Error(data.error || "Could not start this video.");
     state.job = { queueId: data.queueId, accessToken: data.accessToken };
     persistActiveJob();
@@ -461,17 +510,15 @@ function wireEvents() {
     else state.duration = button.dataset.value;
     syncSettingButtons(); saveDraft(); invalidateQuote();
   }));
+  elements.modelPicker.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-profile]");
+    if (!button || button.disabled) return;
+    state.profile = button.dataset.profile;
+    renderProfiles(); saveDraft(); invalidateQuote();
+  });
   $("#audio").addEventListener("change", (event) => { state.audio = event.target.checked; saveDraft(); invalidateQuote(); });
   elements.form.addEventListener("submit", getQuote);
   elements.queueButton.addEventListener("click", () => queueVideo());
-  elements.consentCheck.addEventListener("change", () => { elements.confirmConsent.disabled = !elements.consentCheck.checked; });
-  elements.consentForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (event.submitter?.value === "cancel") return elements.consentDialog.close();
-    if (!elements.consentCheck.checked) return;
-    elements.consentDialog.close();
-    queueVideo({ seedance: { confirmed_terms_and_privacy: true, confirmed_legal_right: true, confirmed_screening_acknowledged: true } });
-  });
   elements.helpButton.addEventListener("click", () => {
     const open = elements.helpPanel.hidden;
     elements.helpPanel.hidden = !open;
@@ -485,7 +532,9 @@ function wireEvents() {
 
 async function initialize() {
   restoreDraft();
+  renderProfiles();
   wireEvents();
+  void loadProfiles();
   const rememberedJob = safeStorage(() => JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || "null"));
   if (rememberedJob?.queueId && rememberedJob?.accessToken) {
     state.job = rememberedJob;

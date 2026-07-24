@@ -25,7 +25,7 @@
         <div>
           <p class="kicker">Make your first clip</p>
           <h1 id="intro-heading">Say what you want to see.</h1>
-          <p class="intro-copy">Add a photo if you want more control. We pick the technical settings for you.</p>
+          <p class="intro-copy">Add a photo if you want more control. Pick the kind of result you want, without needing to know the technical names.</p>
         </div>
         <aside class="promise" aria-label="What to expect">
           <strong>Price first.</strong>
@@ -81,6 +81,13 @@
             <p class="mobile-note">On a phone, you can choose from Photos or Files. Long-press the prompt box to use your normal Paste menu.</p>
           </div>
 
+          <fieldset class="field-group model-choice" id="model-choice">
+            <legend>Choose a look</legend>
+            <p class="choice-intro">Pick what matters most. We use the matching Venice model behind the scenes.</p>
+            <div class="model-picker" id="model-picker" aria-label="Video model choice"></div>
+            <p class="model-note" id="model-note" aria-live="polite"></p>
+          </fieldset>
+
           <fieldset class="field-group settings" id="settings">
             <legend>Make it fit</legend>
             <div class="segmented" aria-label="Video format">
@@ -124,6 +131,7 @@
               <div><dt>Format</dt><dd id="review-ratio"></dd></div>
               <div><dt>Length</dt><dd id="review-duration"></dd></div>
               <div><dt>Starting point</dt><dd id="review-source"></dd></div>
+              <div><dt>Look</dt><dd id="review-model"></dd></div>
             </dl>
             <div class="price-block"><span>Exact Venice price</span><strong id="quote-price"></strong></div>
             <button class="primary-button" id="queue-button" type="button">Create video</button>
@@ -170,16 +178,6 @@
         <p><strong>Generation seems slow?</strong> Venice creates videos in a queue. You will see an update once it reports an estimate.</p>
       </div>
     </aside>
-
-    <dialog id="consent-dialog" aria-labelledby="consent-heading">
-      <form method="dialog" id="consent-form">
-        <p class="kicker">One more confirmation</p>
-        <h2 id="consent-heading">You are using a photo with a face.</h2>
-        <p id="consent-policy">Before Venice can make the video, confirm that you have permission to use every person shown.</p>
-        <label class="check-line"><input id="consent-check" type="checkbox"><span>I have the legal right to use this image and agree to the terms shown above.</span></label>
-        <div class="dialog-actions"><button class="secondary-button" value="cancel">Go back</button><button class="primary-button" id="confirm-consent" value="default" disabled>Confirm and create</button></div>
-      </form>
-    </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <script type="module" src="/app.js"></script>

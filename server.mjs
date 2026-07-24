@@ -15,11 +15,44 @@ const uploads = new Map();
 const jobs = new Map();
 const activeMonitors = new Set();
 let pendingJobWrite = Promise.resolve();
+let videoCatalog = null;
+let videoCatalogExpiresAt = 0;
 
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 const validDurations = new Set(["5s", "10s"]);
 const validRatios = new Set(["9:16", "16:9", "1:1"]);
+const MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
+const videoProfiles = [
+  {
+    id: "fast",
+    name: "Fast draft",
+    provider: "LTX Video 2.3 Fast",
+    description: "Quick tests and simple scenes.",
+    models: { text: "ltx-2-v2-3-fast-text-to-video", image: "ltx-2-v2-3-fast-image-to-video" }
+  },
+  {
+    id: "movement",
+    name: "Natural movement",
+    provider: "HappyHorse 1.1",
+    description: "People, animals, and lively movement.",
+    models: { text: "happyhorse-1-1-text-to-video", image: "happyhorse-1-1-image-to-video" }
+  },
+  {
+    id: "cinematic",
+    name: "Cinematic",
+    provider: "Kling O3 Standard",
+    description: "Polished camera work and visual detail.",
+    models: { text: "kling-o3-standard-text-to-video", image: "kling-o3-standard-image-to-video" }
+  },
+  {
+    id: "creative",
+    name: "Creative detail",
+    provider: "Wan 2.7",
+    description: "Expressive scenes led by a detailed prompt.",
+    models: { text: "wan-2-7-text-to-video", image: "wan-2-7-image-to-video" }
+  }
+];
 
 await mkdir(VIDEO_DIR, { recursive: true });
 
@@ -117,27 +150,85 @@ async function venice(path, body) {
   return { response, contentType: response.headers.get("content-type") || "" };
 }
 
-function jobSettings(input) {
-  if (!validDurations.has(input.duration) || !validRatios.has(input.aspectRatio)) {
-    throw new Error("Choose a supported duration and format.");
+async function veniceGet(path) {
+  const response = await fetch(`${VENICE_BASE}/${path}`, {
+    headers: { Authorization: `Bearer ${apiKey()}` }
+  });
+  return response;
+}
+
+async function getVideoCatalog() {
+  if (videoCatalog && Date.now() < videoCatalogExpiresAt) return videoCatalog;
+  try {
+    const response = await veniceGet("models?type=video");
+    if (!response.ok) throw new Error("Venice could not load its video models.");
+    const body = await response.json();
+    videoCatalog = Array.isArray(body.data) ? body.data.filter((entry) => !entry.model_spec?.offline && !entry.model_spec?.beta && !entry.model_spec?.betaModel) : [];
+    videoCatalogExpiresAt = Date.now() + MODEL_CATALOG_TTL_MS;
+    return videoCatalog;
+  } catch {
+    return [];
   }
+}
+
+function profileFor(id) {
+  return videoProfiles.find((profile) => profile.id === id) || videoProfiles[0];
+}
+
+function modelForProfile(profile, catalog, hasImage) {
+  const modelId = profile.models[hasImage ? "image" : "text"];
+  return catalog.find((entry) => entry.id === modelId) || null;
+}
+
+function profileResponse(profile, catalog) {
+  const text = modelForProfile(profile, catalog, false);
+  const image = modelForProfile(profile, catalog, true);
   return {
-    model: input.hasImage ? "seedance-2-0-fast-image-to-video" : "seedance-2-0-fast-text-to-video",
-    duration: input.duration,
-    aspect_ratio: input.aspectRatio,
-    resolution: "720p",
-    audio: Boolean(input.audio)
+    id: profile.id,
+    name: profile.name,
+    provider: text?.model_spec?.name || image?.model_spec?.name || profile.provider,
+    description: profile.description,
+    supportsText: catalog.length === 0 || Boolean(text),
+    supportsPhoto: catalog.length === 0 || Boolean(image)
   };
 }
 
-function validSeedanceConsent(consents) {
-  const consent = consents?.seedance;
-  if (!consent) return undefined;
-  const fields = ["confirmed_terms_and_privacy", "confirmed_legal_right", "confirmed_screening_acknowledged"];
-  if (Object.keys(consent).length !== fields.length || !fields.every((field) => consent[field] === true)) {
-    throw new Error("All face consent confirmations are required.");
+function supportedValues(values, allowed) {
+  if (!Array.isArray(values) || values.length === 0) return allowed;
+  return allowed.filter((value) => values.includes(value));
+}
+
+async function jobSettings(input) {
+  if (!validDurations.has(input.duration) || !validRatios.has(input.aspectRatio)) {
+    throw new Error("Choose a supported duration and format.");
   }
-  return { seedance: Object.fromEntries(fields.map((field) => [field, true])) };
+  const hasImage = Boolean(input.hasImage);
+  const profile = profileFor(input.profile);
+  const catalog = await getVideoCatalog();
+  const selected = modelForProfile(profile, catalog, hasImage);
+  if (catalog.length > 0 && !selected) {
+    throw new Error(`${profile.name} is not available for ${hasImage ? "photo" : "text"} videos right now. Choose another option.`);
+  }
+  const constraints = selected?.model_spec?.constraints || {};
+  const durations = supportedValues(constraints.durations, [...validDurations]);
+  const aspectRatios = supportedValues(constraints.aspect_ratios, [...validRatios]);
+  if (!durations.includes(input.duration)) {
+    throw new Error(`${profile.name} supports ${durations.join(" or ")} clips in this studio.`);
+  }
+  if (!aspectRatios.includes(input.aspectRatio)) {
+    throw new Error(`${profile.name} does not support that format. Try ${aspectRatios[0] || "a different format"}.`);
+  }
+  const resolution = Array.isArray(constraints.resolutions) && constraints.resolutions.length > 0
+    ? (constraints.resolutions.includes("720p") ? "720p" : constraints.resolutions[0])
+    : "720p";
+  const settings = {
+    model: selected?.id || profile.models[hasImage ? "image" : "text"],
+    duration: input.duration
+  };
+  if (!selected || Array.isArray(constraints.aspect_ratios)) settings.aspect_ratio = input.aspectRatio;
+  if (!selected || Array.isArray(constraints.resolutions)) settings.resolution = resolution;
+  if (!selected || constraints.audio_configurable === true) settings.audio = Boolean(input.audio);
+  return settings;
 }
 
 function wait(ms) {
@@ -242,7 +333,7 @@ async function handleMedia(req, res) {
 
 async function handleQuote(req, res) {
   const input = await readJson(req);
-  const settings = jobSettings(input);
+  const settings = await jobSettings(input);
   const { response } = await venice("video/quote", settings);
   const body = await response.json().catch(() => ({ error: "Venice could not provide a quote." }));
   json(res, response.status, body);
@@ -254,16 +345,13 @@ async function handleQueue(req, res) {
   if (!prompt) return json(res, 400, { error: "Describe the video you want to make." });
   if (prompt.length > 2_500) return json(res, 400, { error: "Keep the description under 2,500 characters." });
   const hasImage = Boolean(input.mediaToken);
-  const settings = jobSettings({ ...input, hasImage });
+  const settings = await jobSettings({ ...input, hasImage });
   const requestBody = { ...settings, prompt };
   if (hasImage) {
     const media = uploads.get(input.mediaToken);
     if (!media) return json(res, 410, { error: "Your photo session expired. Please add it again." });
     requestBody.image_url = media.dataUrl;
   }
-  const consents = validSeedanceConsent(input.consents);
-  if (consents) requestBody.consents = consents;
-
   const { response } = await venice("video/queue", requestBody);
   const body = await response.json().catch(() => ({ error: "Venice did not return a readable response." }));
   if (response.ok && body.queue_id) {
@@ -340,6 +428,10 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && await handleJobGet(url, res)) return;
     if (req.method === "GET" && sendStatic(res, url.pathname)) return;
+    if (req.method === "GET" && url.pathname === "/api/video/models") {
+      const catalog = await getVideoCatalog();
+      return json(res, 200, { profiles: videoProfiles.map((profile) => profileResponse(profile, catalog)), live: catalog.length > 0 });
+    }
     if (req.method === "POST" && url.pathname === "/api/media") return await handleMedia(req, res);
     if (req.method === "POST" && url.pathname === "/api/video/quote") return await handleQuote(req, res);
     if (req.method === "POST" && url.pathname === "/api/video/queue") return await handleQueue(req, res);
