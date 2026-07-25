@@ -31,8 +31,11 @@ const el = {
   mediaError: $("#media-error"),
   extraFrames: $("#extra-frames"),
   extraLabel: $("#extra-label"),
+  extraCount: $("#extra-count"),
   extraFile: $("#extra-file"),
   extraStatus: $("#extra-status"),
+  frameTray: $("#frame-tray"),
+  framingNote: $("#framing-note"),
 
   modelSelect: $("#model-select"),
   ratioControl: $("#ratio-control"),
@@ -94,7 +97,7 @@ const el = {
 };
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
-const MAX_REFERENCES = 3;
+const FALLBACK_IMAGE_SLOTS = { transition: 2, reference: 5, image: 1, video: 1, text: 0 };
 const DRAFT_KEY = "roam-video-draft";
 const ACTIVE_JOB_KEY = "roam-active-video-job";
 const LATEST_VIDEO_KEY = "roam-latest-video";
@@ -149,6 +152,10 @@ const state = {
   endMediaToken: null,
   referenceMediaTokens: [],
   extraFiles: [],
+  extraPreviews: [],
+  sourceAspect: null,
+  ratioTouched: false,
+  previewRatioLocked: false,
   quote: null,
   quoteSignature: null,
   phase: "idle",
@@ -189,11 +196,82 @@ function formatElapsed(milliseconds) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function applyPreviewRatio(ratio) {
-  const [width, height] = String(ratio || "9:16").split(":").map(Number);
+function setPreviewFrame(width, height) {
   const valid = width > 0 && height > 0;
   el.previewFrame.style.setProperty("--preview-ratio", valid ? `${width} / ${height}` : "9 / 16");
   el.previewFrame.style.setProperty("--preview-ar", String(valid ? width / height : 0.5625));
+}
+
+function applyPreviewRatio(ratio) {
+  // A loaded video's own dimensions win: the model does not always return the
+  // shape that was requested, and the frame must not crop whatever arrives.
+  if (state.previewRatioLocked) return;
+  const [width, height] = String(ratio || "9:16").split(":").map(Number);
+  setPreviewFrame(width, height);
+}
+
+function onVideoMetadata() {
+  const { videoWidth, videoHeight } = el.resultVideo;
+  if (!videoWidth || !videoHeight) return;
+  state.previewRatioLocked = true;
+  setPreviewFrame(videoWidth, videoHeight);
+}
+
+function unlockPreviewRatio() {
+  state.previewRatioLocked = false;
+  applyPreviewRatio(currentOptions().aspectRatios?.length ? state.ratio : "16:9");
+}
+
+const parseRatio = (value) => {
+  const [width, height] = String(value || "").split(":").map(Number);
+  return width > 0 && height > 0 ? width / height : null;
+};
+
+function closestRatio(aspect, ratios) {
+  let best = null;
+  let bestGap = Infinity;
+  for (const candidate of ratios) {
+    const value = parseRatio(candidate);
+    if (!value) continue;
+    const gap = Math.abs(Math.log(value / aspect));
+    if (gap < bestGap) { bestGap = gap; best = candidate; }
+  }
+  return best;
+}
+
+// Warn before generating when the requested frame cannot hold the whole photo,
+// because that is the crop the model will perform.
+function renderFramingNote() {
+  const options = currentOptions();
+  const ratios = options.aspectRatios || [];
+  const kind = currentInputKind();
+  if (!state.sourceAspect || kind === "text" || kind === "video") {
+    el.framingNote.hidden = true;
+    return;
+  }
+  if (!ratios.length) {
+    el.framingNote.hidden = false;
+    setText(el.framingNote, "This model picks its own frame shape, so it may crop your photo. Choose a model with a SHAPE control to keep all of it.");
+    return;
+  }
+  const target = parseRatio(state.ratio);
+  if (!target) { el.framingNote.hidden = true; return; }
+  const gap = Math.abs(Math.log(target / state.sourceAspect));
+  const better = closestRatio(state.sourceAspect, ratios);
+  if (better && better !== state.ratio) {
+    const orientation = state.sourceAspect < target ? "taller" : "wider";
+    el.framingNote.hidden = false;
+    setText(el.framingNote, `Your photo is ${orientation} than the ${state.ratio} frame, so the model will crop it. ${better} keeps more of it.`);
+    return;
+  }
+  // Already on the closest frame this model offers, so only mention a trim
+  // that will actually be visible.
+  if (gap >= 0.15) {
+    el.framingNote.hidden = false;
+    setText(el.framingNote, `${state.ratio} is the closest frame this model offers, so the edges of your photo will be trimmed a little.`);
+    return;
+  }
+  el.framingNote.hidden = true;
 }
 
 /* ------------------------------------------------------------------- access */
@@ -305,6 +383,7 @@ function modelsForMode(mode) {
         privacy: model.privacy || "",
         inputKind: model.inputKind,
         beta: model.beta === true,
+        imageSlots: model.imageSlots,
         recommended: model.recommended === true,
         options: { ...DEFAULT_OPTIONS, ...(model.options || {}) }
       }))
@@ -333,6 +412,11 @@ function currentModel() {
 }
 
 const currentOptions = () => currentModel()?.options || DEFAULT_OPTIONS;
+const imageSlots = () => {
+  const model = currentModel();
+  const kind = currentInputKind();
+  return Number.isInteger(model?.imageSlots) ? model.imageSlots : FALLBACK_IMAGE_SLOTS[kind] ?? 1;
+};
 const currentInputKind = () => currentModel()?.inputKind || (state.mode === "text" ? "text" : state.mode);
 
 function renderModels() {
@@ -359,7 +443,8 @@ function renderModels() {
       for (const model of entries) {
         const option = document.createElement("option");
         option.value = model.id;
-        option.textContent = `${model.name}${model.beta ? " · beta" : ""}`;
+        const slots = Number.isInteger(model.imageSlots) ? model.imageSlots : FALLBACK_IMAGE_SLOTS[model.inputKind] ?? 1;
+        option.textContent = `${model.name}${model.beta ? " · beta" : ""}${slots > 1 ? ` · ${slots} images` : ""}`;
         group.append(option);
       }
       el.modelSelect.append(group);
@@ -399,11 +484,17 @@ function syncOptions() {
   state.audio = audioConfigurable ? state.audioPreference : options.audioAvailable === true;
 
   fillSelect(el.durationSelect, durations, state.duration, (value) => (value === "Auto" ? "Auto" : value.replace("s", " sec")));
-  fillSelect(el.ratioSelect, ratios, state.ratio, (value) => `${value}${value === "9:16" ? " tall" : value === "16:9" ? " wide" : value === "1:1" ? " square" : ""}`);
+  const ratioChoosable = options.aspectRatioConfigurable && ratios.length > 0;
+  if (ratioChoosable) {
+    fillSelect(el.ratioSelect, ratios, state.ratio, (value) => `${value}${value === "9:16" ? " tall" : value === "16:9" ? " wide" : value === "1:1" ? " square" : ""}`);
+  } else {
+    fillSelect(el.ratioSelect, ["model"], "model", () => "Model decides");
+  }
+  el.ratioSelect.disabled = !ratioChoosable;
   fillSelect(el.resolutionSelect, resolutions, state.resolution, (value) => value);
   fillSelect(el.upscaleSelect, upscales, state.upscaleFactor, (value) => `${value}× sharper`);
 
-  el.ratioControl.hidden = !(options.aspectRatioConfigurable && ratios.length);
+  el.ratioControl.classList.toggle("is-locked", !ratioChoosable);
   el.resolutionControl.hidden = !(options.resolutionConfigurable && resolutions.length);
   el.upscaleControl.hidden = !upscales.length;
   el.durationControl.hidden = durations.length <= 1 && durations[0] === "Auto" && upscales.length > 0;
@@ -418,13 +509,14 @@ function syncOptions() {
   updatePromptCount();
 
   applyPreviewRatio(ratios.length ? state.ratio : "16:9");
+  renderFramingNote();
 
   if (model) {
     const requirement = {
       text: "Starts from your words only.",
       image: "Needs one starting image.",
-      transition: "Needs a first and a last image.",
-      reference: "Needs a reference image to keep the subject consistent.",
+      transition: "Combines two images: the clip travels from the first to the last.",
+      reference: `Combines up to ${imageSlots()} images of one subject to keep it consistent.`,
       video: "Needs a source video."
     }[model.inputKind] || "";
     el.modelHint.innerHTML = "";
@@ -451,7 +543,8 @@ function renderSpec(model, options) {
     ["Shapes", (options.aspectRatios || []).join(", ") || "Fixed by the model"],
     ["Quality", (options.resolutions || []).join(", ") || (options.upscaleFactors || []).map((value) => `${value}×`).join(", ") || "Fixed by the model"],
     ["Sound", options.audioConfigurable ? "Optional" : options.audioAvailable ? "Always on" : "None"],
-    ["Prompt limit", `${(options.promptCharacterLimit || 2500).toLocaleString()} chars`]
+    ["Prompt limit", `${(options.promptCharacterLimit || 2500).toLocaleString()} chars`],
+    ["Images", imageSlots() === 0 ? "None" : imageSlots() === 1 ? "1" : `Up to ${imageSlots()}`]
   ];
   for (const [term, value] of rows) {
     const wrap = document.createElement("div");
@@ -485,8 +578,8 @@ function renderSource() {
 
   const copy = {
     image: { title: "STARTING IMAGE", upload: "Add the photo to animate", detail: "JPG, PNG, WebP or GIF · max 25 MB", choose: "CHOOSE PHOTO" },
-    transition: { title: "FIRST IMAGE", upload: "Add the opening frame", detail: "The ending frame is set just below.", choose: "CHOOSE FIRST" },
-    reference: { title: "REFERENCE IMAGE", upload: "Add the subject to keep consistent", detail: "JPG, PNG, WebP or GIF · max 25 MB", choose: "CHOOSE IMAGE" },
+    transition: { title: "FIRST FRAME", upload: "Add the opening frame", detail: "Then add the last frame below.", choose: "CHOOSE FIRST" },
+    reference: { title: "MAIN REFERENCE", upload: "Add the subject to keep consistent", detail: "Then add more angles of it below.", choose: "CHOOSE IMAGE" },
     video: { title: "SOURCE VIDEO", upload: "Add the video to work from", detail: "MP4, MOV or WebM · max 25 MB", choose: "CHOOSE VIDEO" }
   }[kind];
 
@@ -502,20 +595,92 @@ function renderSource() {
   renderExtraFrames(kind);
 }
 
+function clearExtraFiles() {
+  for (const url of state.extraPreviews) URL.revokeObjectURL(url);
+  state.extraPreviews = [];
+  state.extraFiles = [];
+  state.endMediaToken = null;
+  state.referenceMediaTokens = [];
+  el.extraFile.value = "";
+}
+
+// Only models that actually accept more than one image get a tray. Everything
+// else keeps the single dropzone, so the interface never offers a slot Venice
+// would reject.
 function renderExtraFrames(kind) {
-  const showExtra = kind === "transition" || kind === "reference";
+  const slots = imageSlots();
+  const showExtra = slots > 1;
   el.extraFrames.hidden = !showExtra;
   if (!showExtra) {
-    state.endMediaToken = null;
-    state.referenceMediaTokens = [];
-    state.extraFiles = [];
-    el.extraFile.value = "";
+    if (state.extraFiles.length) clearExtraFiles();
     return;
   }
-  el.extraFile.multiple = kind === "reference";
-  setText(el.extraLabel, kind === "transition" ? "ENDING FRAME" : `EXTRA REFERENCES (OPTIONAL · UP TO ${MAX_REFERENCES})`);
-  if (kind === "transition" && !state.extraFiles.length) setText(el.extraStatus, "Choose the last frame of the transition.");
-  if (kind === "reference" && !state.extraFiles.length) setText(el.extraStatus, "More angles of the same subject improve consistency.");
+  const extraSlots = slots - 1;
+  if (state.extraFiles.length > extraSlots) {
+    for (const url of state.extraPreviews.splice(extraSlots)) URL.revokeObjectURL(url);
+    state.extraFiles = state.extraFiles.slice(0, extraSlots);
+  }
+  el.extraFile.multiple = extraSlots > 1;
+  setText(el.extraLabel, kind === "transition" ? "LAST FRAME" : "MORE ANGLES OF THE SAME SUBJECT");
+  setText(el.extraCount, `${state.extraFiles.length} / ${extraSlots}`);
+  if (!state.extraFiles.length) {
+    setText(el.extraStatus, kind === "transition"
+      ? "The clip travels from your first image to this one."
+      : "Optional. More angles keep the subject consistent as it moves.");
+  }
+  renderFrameTray(kind, extraSlots);
+}
+
+function renderFrameTray(kind, extraSlots) {
+  el.frameTray.replaceChildren();
+  state.extraFiles.forEach((file, index) => {
+    const slot = document.createElement("li");
+    slot.className = "frame-slot";
+
+    const image = document.createElement("img");
+    image.src = state.extraPreviews[index];
+    image.alt = kind === "transition" ? "Last frame" : `Reference image ${index + 2}`;
+
+    const drop = document.createElement("button");
+    drop.type = "button";
+    drop.className = "frame-drop";
+    drop.dataset.dropIndex = String(index);
+    drop.setAttribute("aria-label", `Remove ${file.name || "this image"}`);
+    drop.innerHTML = '<svg class="ico"><use href="#i-x"></use></svg>';
+
+    const tag = document.createElement("span");
+    tag.className = "frame-tag";
+    tag.textContent = kind === "transition" ? "LAST" : `REF ${index + 2}`;
+
+    slot.append(image, drop, tag);
+    el.frameTray.append(slot);
+  });
+  if (state.extraFiles.length < extraSlots) {
+    const add = document.createElement("li");
+    const label = document.createElement("label");
+    label.className = "frame-add";
+    label.setAttribute("for", "extra-file");
+    label.setAttribute("role", "button");
+    label.tabIndex = 0;
+    label.setAttribute("aria-label", kind === "transition" ? "Add the last frame" : "Add another reference image");
+    label.innerHTML = '<svg class="ico"><use href="#i-plus"></use></svg>';
+    label.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); }
+    });
+    add.append(label);
+    el.frameTray.append(add);
+  }
+}
+
+function removeExtraFile(index) {
+  URL.revokeObjectURL(state.extraPreviews[index]);
+  state.extraPreviews.splice(index, 1);
+  state.extraFiles.splice(index, 1);
+  state.endMediaToken = null;
+  state.referenceMediaTokens = [];
+  renderExtraFrames(currentInputKind());
+  invalidateQuote();
+  renderDock();
 }
 
 /* -------------------------------------------------------------------- media */
@@ -526,6 +691,7 @@ function clearMedia() {
   state.mediaKind = null;
   state.mediaToken = null;
   state.previewUrl = null;
+  state.sourceAspect = null;
   el.previewImage.removeAttribute("src");
   el.previewVideo.removeAttribute("src");
   el.previewImage.hidden = true;
@@ -585,6 +751,7 @@ async function selectMedia(file) {
   el.previewVideo.hidden = kind !== "video";
   if (kind === "image") el.previewImage.src = state.previewUrl;
   else el.previewVideo.src = state.previewUrl;
+  void measureSource(file, kind);
   setText(el.mediaName, file.name || "File from clipboard");
   setText(el.mediaDetail, `Preparing ${mediaSize(file.size)}…`);
   el.dropEmpty.hidden = true;
@@ -607,35 +774,75 @@ async function selectMedia(file) {
   }
 }
 
+// Knowing the source's shape lets the console request a frame that fits it.
+async function measureSource(file, kind) {
+  state.sourceAspect = null;
+  try {
+    const aspect = await new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const node = kind === "video" ? document.createElement("video") : new Image();
+      const done = (value) => { URL.revokeObjectURL(url); resolve(value); };
+      node.onerror = () => { URL.revokeObjectURL(url); reject(new Error("unreadable")); };
+      if (kind === "video") {
+        node.preload = "metadata";
+        node.onloadedmetadata = () => done(node.videoWidth / node.videoHeight);
+      } else {
+        node.onload = () => done(node.naturalWidth / node.naturalHeight);
+      }
+      node.src = url;
+    });
+    if (!Number.isFinite(aspect) || aspect <= 0) return;
+    state.sourceAspect = aspect;
+    const options = currentOptions();
+    const ratios = options.aspectRatios || [];
+    if (!state.ratioTouched && options.aspectRatioConfigurable && ratios.length) {
+      const match = closestRatio(aspect, ratios);
+      if (match && match !== state.ratio) {
+        state.ratio = match;
+        saveDraft();
+        invalidateQuote();
+      }
+    }
+    syncOptions();
+  } catch {
+    renderFramingNote();
+  }
+}
+
 async function selectExtraFiles(files) {
   const list = [...(files || [])];
+  el.extraFile.value = "";
   if (!list.length) return;
   if (!requireAccess()) return;
   const kind = currentInputKind();
+  const room = Math.max(0, imageSlots() - 1 - state.extraFiles.length);
+  if (!room) { setText(el.extraStatus, "This model has no room for another image."); return; }
   for (const file of list) {
     const problem = mediaProblem(file);
     if (problem || mediaKindFor(file) !== "image") { setText(el.extraStatus, problem || "Extra frames must be images."); return; }
   }
+  const chosen = list.slice(0, room);
+  const skipped = list.length - chosen.length;
+  state.uploading = true;
   setText(el.extraStatus, "Preparing…");
   try {
-    if (kind === "transition") {
-      const body = await uploadMedia(list[0]);
-      state.endMediaToken = body.mediaToken;
-      state.extraFiles = [list[0]];
-      setText(el.extraStatus, `${list[0].name || "Ending frame"} is ready.`);
-    } else {
-      const chosen = list.slice(0, MAX_REFERENCES);
-      const uploaded = await Promise.all(chosen.map((file) => uploadMedia(file)));
-      state.referenceMediaTokens = uploaded.map((body) => body.mediaToken);
-      state.extraFiles = chosen;
-      setText(el.extraStatus, `${uploaded.length} extra reference${uploaded.length === 1 ? "" : "s"} ready.`);
+    const uploaded = await Promise.all(chosen.map((file) => uploadMedia(file)));
+    for (const file of chosen) {
+      state.extraFiles.push(file);
+      state.extraPreviews.push(URL.createObjectURL(file));
     }
+    if (kind === "transition") state.endMediaToken = uploaded[0].mediaToken;
+    else state.referenceMediaTokens = [...state.referenceMediaTokens, ...uploaded.map((body) => body.mediaToken)];
+    renderExtraFrames(kind);
+    setText(el.extraStatus, skipped
+      ? `Added ${chosen.length}. This model takes ${imageSlots()} images in total.`
+      : `${state.extraFiles.length + 1} image${state.extraFiles.length ? "s" : ""} will go into this video.`);
     invalidateQuote();
   } catch (error) {
-    state.endMediaToken = null;
-    state.referenceMediaTokens = [];
-    state.extraFiles = [];
     setText(el.extraStatus, error instanceof Error ? error.message : "Could not prepare those images.");
+  } finally {
+    state.uploading = false;
+    renderDock();
   }
 }
 
@@ -905,6 +1112,7 @@ function tickClock() {
 }
 
 function setBusyPreview(phase, detail) {
+  if (phase === "submitting") unlockPreviewRatio();
   state.phase = phase;
   showPreview("loading");
   setText(el.loadingPhase, { submitting: "SUBMITTING", queued: "IN THE QUEUE", rendering: "RENDERING FRAMES", saving: "SAVING VIDEO" }[phase] || "WORKING");
@@ -957,7 +1165,7 @@ async function ensureUploads() {
   if (kind === "transition" && state.extraFiles[0] && !state.endMediaToken) {
     state.endMediaToken = (await uploadMedia(state.extraFiles[0])).mediaToken;
   }
-  if (kind === "reference" && state.extraFiles.length && !state.referenceMediaTokens.length) {
+  if (kind !== "transition" && state.extraFiles.length && state.referenceMediaTokens.length !== state.extraFiles.length) {
     const uploaded = await Promise.all(state.extraFiles.map((file) => uploadMedia(file)));
     state.referenceMediaTokens = uploaded.map((body) => body.mediaToken);
   }
@@ -1121,6 +1329,7 @@ function resetForAnother() {
   state.playbackSources = [];
   state.phase = "idle";
   state.finishedIn = null;
+  unlockPreviewRatio();
   showPreview("empty");
   renderDock();
   el.prompt.focus({ preventScroll: true });
@@ -1295,6 +1504,10 @@ function wire() {
   el.photoInput.addEventListener("change", () => selectMedia(el.photoInput.files?.[0]));
   el.cameraInput.addEventListener("change", () => selectMedia(el.cameraInput.files?.[0]));
   el.extraFile.addEventListener("change", () => selectExtraFiles(el.extraFile.files));
+  el.frameTray.addEventListener("click", (event) => {
+    const drop = event.target.closest("[data-drop-index]");
+    if (drop) removeExtraFile(Number(drop.dataset.dropIndex));
+  });
   el.removeMedia.addEventListener("click", clearMedia);
   el.pasteMedia.addEventListener("click", async () => {
     try { await selectMedia(await readClipboardImage()); }
@@ -1322,7 +1535,14 @@ function wire() {
     saveDraft();
     invalidateQuote();
   });
-  el.ratioSelect.addEventListener("change", () => { state.ratio = el.ratioSelect.value; applyPreviewRatio(state.ratio); saveDraft(); invalidateQuote(); });
+  el.ratioSelect.addEventListener("change", () => {
+    state.ratio = el.ratioSelect.value;
+    state.ratioTouched = true;
+    unlockPreviewRatio();
+    renderFramingNote();
+    saveDraft();
+    invalidateQuote();
+  });
   el.durationSelect.addEventListener("change", () => { state.duration = el.durationSelect.value; saveDraft(); invalidateQuote(); });
   el.resolutionSelect.addEventListener("change", () => { state.resolution = el.resolutionSelect.value; saveDraft(); invalidateQuote(); });
   el.upscaleSelect.addEventListener("change", () => { state.upscaleFactor = el.upscaleSelect.value; saveDraft(); invalidateQuote(); });
@@ -1335,6 +1555,7 @@ function wire() {
   });
   el.makeAnother.addEventListener("click", resetForAnother);
   el.resultVideo.addEventListener("error", onVideoError);
+  el.resultVideo.addEventListener("loadedmetadata", onVideoMetadata);
 
   el.historyButton.addEventListener("click", () => { renderHistory(); openDrawer(el.historyDrawer); });
   el.closeHistory.addEventListener("click", closeDrawer);
