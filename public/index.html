@@ -39,6 +39,8 @@
       <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="i-sound" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></symbol>
+      <symbol id="i-wand" viewBox="0 0 24 24"><path d="M14.5 5.5 18.5 9.5 8 20H4v-4z"/><path d="m14.5 5.5 2-2 4 4-2 2M6 3.5 6.6 5.4 8.5 6l-1.9.6L6 8.5 5.4 6.6 3.5 6l1.9-.6zM18.5 14l.5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 8h11a5 5 0 0 1 0 10H7"/><path d="M6 4 2.5 8 6 12"/></symbol>
     </svg>
 
     <div class="app-shell">
@@ -82,6 +84,10 @@
             <span class="prompt-caret" aria-hidden="true">&gt;</span>
             <label class="sr-only" for="prompt" id="prompt-label">Video prompt</label>
             <textarea id="prompt" name="prompt" rows="3" maxlength="2500" autocomplete="off" autocapitalize="sentences" spellcheck="true" placeholder="Describe the scene, motion, camera, and light…"></textarea>
+            <button class="wand" id="optimize-button" type="button" title="Improve this prompt" aria-label="Improve this prompt">
+              <svg class="ico" aria-hidden="true"><use href="#i-wand"></use></svg>
+              <span id="optimize-label">IMPROVE</span>
+            </button>
           </div>
           <div class="prompt-foot">
             <div class="chip-row" role="group" aria-label="Prompt presets">
@@ -201,6 +207,10 @@
             <a class="chip chip-accent" id="download-video" download="vivvideo.mp4"><svg class="ico"><use href="#i-download"></use></svg>DOWNLOAD</a>
             <button class="chip" id="make-another" type="button"><svg class="ico"><use href="#i-plus"></use></svg>NEW</button>
           </div>
+          <p class="playback-note" id="playback-note" role="status" hidden>
+            <span id="playback-note-text"></span>
+            <a id="playback-open" href="#" target="_blank" rel="noopener">Open it in a new tab</a> or use Download.
+          </p>
         </section>
 
         <section class="area-dock" id="dock">

@@ -140,13 +140,49 @@
 
         <section>
           <h2>WRITING A BETTER PROMPT</h2>
+          <p>Type a rough idea, then press the <b>wand</b> in the corner of the prompt box. It rewrites your draft into a full shot description using the structure below, tuned to the model, length and shape you have selected. Press it again to undo — your own wording is never lost.</p>
+          <p class="mini-note">The eight things a video model wants, in one flowing paragraph:</p>
+          <div class="model-cards">
+            <article class="model-card">
+              <h3>1 · SUBJECT</h3>
+              <p>One concrete subject with the detail that makes it recognisable. "A weathered fisherman", not "a person".</p>
+            </article>
+            <article class="model-card">
+              <h3>2 · ACTION</h3>
+              <p>One continuous action that fits in the clip. Five seconds is a single beat, not a story.</p>
+            </article>
+            <article class="model-card">
+              <h3>3 · SETTING</h3>
+              <p>Place, time of day, weather. These do most of the work in setting the look.</p>
+            </article>
+            <article class="model-card">
+              <h3>4 · CAMERA</h3>
+              <p>Shot size, angle, lens, and one movement: locked off, slow dolly in, tracking, crane up, handheld, orbit.</p>
+            </article>
+            <article class="model-card">
+              <h3>5 · LIGHT</h3>
+              <p>Source, direction, quality. "Low sun through blinds" beats "good lighting".</p>
+            </article>
+            <article class="model-card">
+              <h3>6 · ATMOSPHERE</h3>
+              <p>Mood, plus something in the air: haze, dust, rain, steam. It gives the motion something to reveal.</p>
+            </article>
+            <article class="model-card">
+              <h3>7 · STYLE</h3>
+              <p>Cinematic, documentary handheld, 35mm grain, anamorphic, anime, stop motion.</p>
+            </article>
+            <article class="model-card">
+              <h3>8 · MOTION DETAIL</h3>
+              <p>Speed, and secondary movement: hair, fabric, water, smoke, reflections.</p>
+            </article>
+          </div>
           <ul class="tip-list">
-            <li>Name one subject and one action. Two competing actions usually produce neither.</li>
-            <li>Say what the camera does: slow push in, locked off, handheld follow, wide orbit.</li>
-            <li>Say what the light does: low sun, overcast, single hard key, neon spill.</li>
-            <li>Use the ADVANCED negative prompt for what you keep getting and do not want.</li>
+            <li>Write prose, not keyword lists. Video models follow sentences far better than comma-separated tags.</li>
+            <li>Say what is there, never what is missing. "No people" often produces people — put it in the negative prompt instead.</li>
+            <li>Stay in one shot. Asking for cuts inside a five-second clip produces mush.</li>
+            <li>With a starting image, describe the motion and what changes — not what is already visible in the frame.</li>
+            <li>For video-to-video, describe the treatment, and let the source clip keep its own movement.</li>
             <li>Change one thing per retry, so you can tell what actually improved.</li>
-            <li>With a starting image, describe the motion — not the things already visible in the frame.</li>
           </ul>
         </section>
 
