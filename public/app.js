@@ -939,7 +939,7 @@ async function deliverVideo() {
     state.finishedIn = state.startedAt ? Date.now() - state.startedAt : null;
     safeStorage(() => localStorage.removeItem(ACTIVE_JOB_KEY));
     state.job = null;
-    setResult(blob, `roam-${queueId}.mp4`);
+    setResult(blob, `vivvideo-${queueId}.mp4`);
     showToast(saved ? "Video ready and saved on this device." : "Video ready. Download it now — this browser could not keep a copy.");
   } catch (error) {
     showError(error instanceof Error ? error.message : "The video is ready, but it could not be downloaded yet.");
@@ -1083,7 +1083,7 @@ async function openHistoryItem(id) {
   const blob = await readVideoOnDevice(id);
   if (!blob) { showToast("That clip is no longer stored on this device."); return; }
   closeDrawer();
-  setResult(blob, `roam-${id}.mp4`);
+  setResult(blob, `vivvideo-${id}.mp4`);
   state.finishedIn = null;
 }
 
@@ -1097,7 +1097,7 @@ async function restoreLatestVideo() {
   const newest = readHistory()[0]?.id || safeStorage(() => localStorage.getItem(LATEST_VIDEO_KEY));
   if (!newest) return;
   const blob = await readVideoOnDevice(newest);
-  if (blob) { setResult(blob, `roam-${newest}.mp4`); state.finishedIn = null; renderDock(); }
+  if (blob) { setResult(blob, `vivvideo-${newest}.mp4`); state.finishedIn = null; renderDock(); }
 }
 
 /* ------------------------------------------------------------------ drawers */

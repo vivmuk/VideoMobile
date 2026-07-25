@@ -748,5 +748,5 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   for (const job of pendingJobs()) void monitorJob(job.queue_id);
-  console.log(`Roam is ready at http://localhost:${PORT}`);
+  console.log(`vivvideo is ready at http://localhost:${PORT}`);
 });

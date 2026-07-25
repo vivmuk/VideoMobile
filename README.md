@@ -1,6 +1,6 @@
-# Roam video studio
+# vivvideo
 
-Roam is a focused, mobile-first Venice video front end, presented as a dark terminal-style **Command Center**: one prompt console, one row of labelled controls, one preview, one Generate button. The server refreshes the Venice catalog before catalog, quote, and queue requests, then only exposes fields that the selected model currently accepts.
+vivvideo is a focused, mobile-first Venice video front end, presented as a dark terminal-style **Command Center**: one prompt console, one row of labelled controls, one preview, one Generate button. The server refreshes the Venice catalog before catalog, quote, and queue requests, then only exposes fields that the selected model currently accepts.
 
 ## Command Center interface
 
