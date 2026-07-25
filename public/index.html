@@ -132,9 +132,13 @@
             </div>
           </div>
           <div class="extra-frames" id="extra-frames" hidden>
-            <label class="mini-label" for="extra-file" id="extra-label">ENDING FRAME</label>
-            <input id="extra-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif">
-            <span class="mini-note" id="extra-status">Choose the last frame.</span>
+            <div class="extra-head">
+              <span class="mini-label" id="extra-label">MORE IMAGES</span>
+              <span class="mini-note mono" id="extra-count"></span>
+            </div>
+            <input class="sr-only" id="extra-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif" multiple>
+            <ul class="frame-tray" id="frame-tray"></ul>
+            <p class="mini-note" id="extra-status"></p>
           </div>
           <p class="field-error" id="media-error" role="status"></p>
         </section>

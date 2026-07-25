@@ -26,6 +26,7 @@ const fallbackDurations = ["5s", "10s"];
 const fallbackRatios = ["9:16", "16:9", "1:1"];
 const fallbackResolutions = ["720p"];
 const MODEL_CATALOG_TTL_MS = 0;
+const MAX_REFERENCE_IMAGES = 5;
 const SHARED_ACCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const videoProfiles = [
   {
@@ -335,6 +336,13 @@ function recommendedProfileFor(modelId) {
   return videoProfiles.find((profile) => Object.values(profile.models).includes(modelId)) || null;
 }
 
+function imageSlotsFor(kind) {
+  if (kind === "transition") return 2;
+  if (kind === "reference") return MAX_REFERENCE_IMAGES;
+  if (kind === "image" || kind === "video") return 1;
+  return 0;
+}
+
 function advancedModelResponse(model) {
   const spec = model.model_spec || {};
   const recommended = recommendedProfileFor(model.id);
@@ -349,6 +357,7 @@ function advancedModelResponse(model) {
     inputKind: modelInputKind(model),
     options: modelOptions(model),
     bestFor: modelBestFor(model),
+    imageSlots: imageSlotsFor(modelInputKind(model)),
     recommended: Boolean(recommended),
     recommendedAs: recommended?.name || null,
     beta: spec.beta === true || spec.betaModel === true
@@ -769,11 +778,14 @@ async function handleQueue(req, res) {
       requestBody.image_url = sourceMedia.dataUrl;
       requestBody.end_image_url = endMedia.dataUrl;
     } else if (settings.inputKind === "reference") {
-      const referenceTokens = Array.isArray(input.referenceMediaTokens) ? input.referenceMediaTokens.slice(0, 8) : [];
+      const referenceTokens = Array.isArray(input.referenceMediaTokens) ? input.referenceMediaTokens.slice(0, MAX_REFERENCE_IMAGES - 1) : [];
       const references = [sourceMedia, ...referenceTokens.map((token) => uploads.get(token))];
       if (references.some((media) => !media || media.kind !== "image")) return json(res, 410, { error: expiredMessage });
+      const extras = references.slice(1).map((media) => media.dataUrl);
       if (settings.model.includes("kling") && settings.model.includes("reference-to-video")) {
-        requestBody.elements = [{ frontal_image_url: sourceMedia.dataUrl }];
+        const element = { frontal_image_url: sourceMedia.dataUrl };
+        if (extras.length) element.reference_image_urls = extras.slice(0, 3);
+        requestBody.elements = [element];
         requestBody.prompt = prompt.includes("@Element1") ? prompt : `@Element1, ${prompt}`;
       } else {
         requestBody.reference_image_urls = references.map((media) => media.dataUrl);
