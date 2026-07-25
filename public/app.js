@@ -55,7 +55,6 @@ const el = {
   modelSpec: $("#model-spec"),
 
   previewFrame: $("#preview-frame"),
-  previewPanel: $(".preview-panel"),
   previewEmpty: $("#preview-empty"),
   previewSub: $("#preview-sub"),
   previewLoading: $("#preview-loading"),
@@ -132,12 +131,12 @@ const DEFAULT_OPTIONS = {
 // Used only before the live Venice catalog loads. These are server-side profile ids,
 // not model identifiers, so the server still resolves the real model from its catalog.
 const fallbackProfiles = [
-  { profileId: "fast", name: "Fast draft - LTX 2.3 Fast", bestFor: "Quick tests and simple scenes.", privacy: "Anonymized", text: true, image: true },
-  { profileId: "movement", name: "Natural movement - HappyHorse 1.1", bestFor: "People, animals, and lively movement.", privacy: "Anonymized", text: true, image: true },
-  { profileId: "seedance", name: "Cinematic - Seedance 2.0", bestFor: "Detailed shots, lighting, and camera direction.", privacy: "Anonymized", text: true, image: true },
-  { profileId: "grok-private", name: "Mood - Grok Imagine Private", bestFor: "Private, expressive storytelling.", privacy: "Private", text: true, image: true },
-  { profileId: "kling", name: "Polished - Kling O3 Standard", bestFor: "Balanced quality and refined camera work.", privacy: "Anonymized", text: true, image: true },
-  { profileId: "wan-unrestricted", name: "Uncensored - Wan 2.7", bestFor: "Explicit, detailed creative direction.", privacy: "Anonymized · Uncensored", text: true, image: true }
+  { profileId: "fast", name: "Fast draft — LTX 2.3 Fast", bestFor: "Quick tests and simple scenes.", privacy: "Anonymized", text: true, image: true },
+  { profileId: "movement", name: "Natural movement — HappyHorse 1.1", bestFor: "People, animals, and lively movement.", privacy: "Anonymized", text: true, image: true },
+  { profileId: "seedance", name: "Cinematic — Seedance 2.0", bestFor: "Detailed shots, lighting, and camera direction.", privacy: "Anonymized", text: true, image: true },
+  { profileId: "grok-private", name: "Mood — Grok Imagine Private", bestFor: "Private, expressive storytelling.", privacy: "Private", text: true, image: true },
+  { profileId: "kling", name: "Polished — Kling O3 Standard", bestFor: "Balanced quality and refined camera work.", privacy: "Anonymized", text: true, image: true },
+  { profileId: "wan-unrestricted", name: "Uncensored — Wan 2.7", bestFor: "Explicit, detailed creative direction.", privacy: "Anonymized · Uncensored", text: true, image: true }
 ];
 
 const state = {
@@ -548,7 +547,7 @@ function renderSpec(model, options) {
   const rows = [
     ["Model ID", model.profileId ? "resolved by the server" : model.id],
     ["Privacy", model.privacy || "See Venice settings"],
-    ["Lengths", (options.durations || []).join(", ") || "Not listed"],
+    ["Lengths", (options.durations || []).join(", ") || "—"],
     ["Shapes", (options.aspectRatios || []).join(", ") || "Fixed by the model"],
     ["Quality", (options.resolutions || []).join(", ") || (options.upscaleFactors || []).map((value) => `${value}×`).join(", ") || "Fixed by the model"],
     ["Sound", options.audioConfigurable ? "Optional" : options.audioAvailable ? "Always on" : "None"],
@@ -856,7 +855,7 @@ async function selectExtraFiles(files) {
 }
 
 async function readClipboardImage() {
-  if (!navigator.clipboard?.read) throw new Error("Use your device's own Paste menu. This browser does not allow image paste here.");
+  if (!navigator.clipboard?.read) throw new Error("Use your device's own Paste menu — this browser does not allow image paste here.");
   const items = await navigator.clipboard.read();
   for (const item of items) {
     const type = item.types.find((candidate) => candidate.startsWith("image/"));
@@ -1107,7 +1106,6 @@ function busyStatus() {
 /* ------------------------------------------------------------------- preview */
 
 function showPreview(which) {
-  el.previewPanel.dataset.state = which;
   el.previewEmpty.hidden = which !== "empty";
   el.previewLoading.hidden = which !== "loading";
   el.previewError.hidden = which !== "error";
@@ -1289,7 +1287,7 @@ async function deliverVideo() {
     safeStorage(() => localStorage.removeItem(ACTIVE_JOB_KEY));
     state.job = null;
     setResult(blob, `vivvideo-${queueId}.mp4`, fileUrl);
-    showToast(saved ? "Video ready and saved on this device." : "Video ready. Download it now. This browser could not keep a copy.");
+    showToast(saved ? "Video ready and saved on this device." : "Video ready. Download it now — this browser could not keep a copy.");
   } catch (error) {
     showError(error instanceof Error ? error.message : "The video is ready, but it could not be downloaded yet.");
   } finally {

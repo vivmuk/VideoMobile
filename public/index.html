@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#FCFAFC">
-    <meta name="color-scheme" content="light">
-    <meta name="description" content="A simple, phone-first Venice AI video maker.">
-    <title>vivvideo</title>
+    <meta name="theme-color" content="#030704">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="Command Center — a terminal-style console for Venice AI video generation.">
+    <title>vivvideo · VIDEO CONSOLE</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23071009'/%3E%3Cpath d='M6 8l3.5 4L6 16M12.5 16H18' stroke='%2383FF4F' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="/styles.css">
   </head>
@@ -63,17 +63,17 @@
           <div class="mode-tabs" role="tablist" aria-label="Generation mode">
             <button class="mode-tab" id="mode-image" type="button" role="tab" data-mode="image" aria-selected="true">
               <svg class="ico" aria-hidden="true"><use href="#i-image"></use></svg>
-              <span class="mode-name">PHOTO</span>
+              <span class="mode-name">IMAGE&nbsp;→&nbsp;VIDEO</span>
               <span class="mode-sub">Animate a photo</span>
             </button>
             <button class="mode-tab" id="mode-text" type="button" role="tab" data-mode="text" aria-selected="false">
               <svg class="ico" aria-hidden="true"><use href="#i-text"></use></svg>
-              <span class="mode-name">TEXT</span>
+              <span class="mode-name">TEXT&nbsp;→&nbsp;VIDEO</span>
               <span class="mode-sub">From words only</span>
             </button>
             <button class="mode-tab" id="mode-video" type="button" role="tab" data-mode="video" aria-selected="false">
               <svg class="ico" aria-hidden="true"><use href="#i-video"></use></svg>
-              <span class="mode-name">VIDEO</span>
+              <span class="mode-name">VIDEO&nbsp;→&nbsp;VIDEO</span>
               <span class="mode-sub">Restyle or upscale</span>
             </button>
           </div>
@@ -103,7 +103,7 @@
 
         <section class="area-source panel" id="source-panel" aria-labelledby="source-title">
           <div class="panel-head">
-            <h2 class="panel-title" id="source-title">REFERENCE</h2>
+            <h2 class="panel-title" id="source-title">STARTING IMAGE</h2>
             <span class="tag tag-required" id="source-tag">REQUIRED</span>
           </div>
           <input class="sr-only" id="photo-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.webm">
@@ -150,11 +150,6 @@
               <label class="control-label" for="model-select"><svg class="ico"><use href="#i-cpu"></use></svg>MODEL</label>
               <div class="select-wrap"><select id="model-select"></select></div>
             </div>
-          </div>
-          <p class="model-hint" id="model-hint">Good for: quick tests and simple scenes.</p>
-          <details class="compact-settings">
-            <summary>Options</summary>
-            <div class="control-grid control-grid-options">
             <div class="control" id="ratio-control">
               <label class="control-label" for="ratio-select"><svg class="ico"><use href="#i-monitor"></use></svg>SHAPE</label>
               <div class="select-wrap"><select id="ratio-select"></select></div>
@@ -171,12 +166,12 @@
               <label class="control-label" for="upscale-select"><svg class="ico"><use href="#i-signal"></use></svg>ENHANCE</label>
               <div class="select-wrap"><select id="upscale-select"></select></div>
             </div>
-            </div>
-          </details>
+          </div>
+          <p class="model-hint" id="model-hint">Good for: quick tests and simple scenes.</p>
         </section>
 
         <details class="area-advanced panel advanced" id="advanced">
-          <summary><span class="summary-label">More</span><span class="summary-note">sound, prompt, model details</span></summary>
+          <summary><span class="summary-label">ADVANCED</span><span class="summary-note">sound · negative prompt · model spec</span></summary>
           <div class="advanced-body">
             <label class="toggle-row" id="audio-row" for="audio">
               <span class="toggle-copy"><strong><svg class="ico"><use href="#i-sound"></use></svg>GENERATE SOUND</strong><small id="audio-note">Only sent to models that accept it.</small></span>
