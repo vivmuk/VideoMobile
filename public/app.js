@@ -1,29 +1,25 @@
 const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
 
-const elements = {
-  form: $("#video-form"),
-  accessCard: $("#access-card"),
-  accessState: $("#access-state"),
-  accessError: $("#access-error"),
-  apiKey: $("#venice-api-key"),
-  useApiKey: $("#use-api-key"),
-  sharedPassword: $("#shared-password"),
-  unlockShared: $("#unlock-shared"),
-  clearAccess: $("#clear-access"),
+const el = {
+  modeTabs: $$(".mode-tab"),
   prompt: $("#prompt"),
   promptCount: $("#prompt-count"),
   pastePrompt: $("#paste-prompt"),
-  copyPrompt: $("#copy-prompt"),
-  pasteMedia: $("#paste-media"),
-  photoInput: $("#photo-file"),
-  cameraInput: $("#camera-file"),
-  sourceLabel: $("#source-label"),
+  chipRow: $(".chip-row"),
+
+  sourcePanel: $("#source-panel"),
+  sourceTitle: $("#source-title"),
+  sourceTag: $("#source-tag"),
+  dropzone: $("#dropzone"),
+  dropEmpty: $("#drop-empty"),
   uploadTitle: $("#upload-title"),
   uploadDescription: $("#upload-description"),
   chooseFileLabel: $("#choose-file-label"),
   cameraLabel: $("#camera-label"),
-  uploadArea: $("#upload-area"),
-  uploadEmpty: $("#upload-empty"),
+  pasteMedia: $("#paste-media"),
+  photoInput: $("#photo-file"),
+  cameraInput: $("#camera-file"),
   mediaPreview: $("#media-preview"),
   previewImage: $("#preview-image"),
   previewVideo: $("#preview-video"),
@@ -31,177 +27,207 @@ const elements = {
   mediaDetail: $("#media-detail"),
   removeMedia: $("#remove-media"),
   mediaError: $("#media-error"),
-  endMedia: $("#end-media"),
-  endPhotoInput: $("#end-photo-file"),
-  endMediaStatus: $("#end-media-status"),
-  modelPicker: $("#model-picker"),
-  modelNote: $("#model-note"),
-  advancedModels: $("#advanced-models"),
-  advancedModel: $("#advanced-model"),
-  advancedModelNote: $("#advanced-model-note"),
-  durationSetting: $("#duration-setting"),
-  durationSelect: $("#duration-select"),
-  ratioSetting: $("#ratio-setting"),
+  extraFrames: $("#extra-frames"),
+  extraLabel: $("#extra-label"),
+  extraFile: $("#extra-file"),
+  extraStatus: $("#extra-status"),
+
+  modelSelect: $("#model-select"),
+  ratioControl: $("#ratio-control"),
   ratioSelect: $("#ratio-select"),
-  resolutionSetting: $("#resolution-setting"),
+  durationControl: $("#duration-control"),
+  durationSelect: $("#duration-select"),
+  resolutionControl: $("#resolution-control"),
   resolutionSelect: $("#resolution-select"),
-  upscaleSetting: $("#upscale-setting"),
+  upscaleControl: $("#upscale-control"),
   upscaleSelect: $("#upscale-select"),
-  quoteButton: $("#quote-button"),
-  queueButton: $("#queue-button"),
-  formError: $("#form-error"),
-  draftStatus: $("#draft-status"),
-  reviewEmpty: $("#review-empty"),
-  reviewQuote: $("#review-quote"),
-  reviewProcessing: $("#review-processing"),
-  reviewComplete: $("#review-complete"),
-  reviewRatio: $("#review-ratio"),
-  reviewDuration: $("#review-duration"),
-  reviewSource: $("#review-source"),
-  reviewModel: $("#review-model"),
-  quotePrice: $("#quote-price"),
-  processingTitle: $("#processing-title"),
-  processingDetail: $("#processing-detail"),
-  processingActivity: $("#processing-activity-text"),
-  processingStatus: $("#processing-status"),
-  processingElapsed: $("#processing-elapsed"),
-  processingTime: $("#processing-time"),
-  processingSteps: [$("#step-submitted"), $("#step-queued"), $("#step-rendering"), $("#step-saving")],
+  modelHint: $("#model-hint"),
+
+  audio: $("#audio"),
+  audioRow: $("#audio-row"),
+  audioNote: $("#audio-note"),
+  negativePrompt: $("#negative-prompt"),
+  modelSpec: $("#model-spec"),
+
+  previewFrame: $("#preview-frame"),
+  previewEmpty: $("#preview-empty"),
+  previewSub: $("#preview-sub"),
+  previewLoading: $("#preview-loading"),
+  loadingPhase: $("#loading-phase"),
+  loadingDetail: $("#loading-detail"),
+  loadingElapsed: $("#loading-elapsed"),
+  progressFill: $("#progress-fill"),
+  previewError: $("#preview-error"),
+  errorMessage: $("#error-message"),
+  retryButton: $("#retry-button"),
   resultVideo: $("#result-video"),
+  previewActions: $("#preview-actions"),
   downloadVideo: $("#download-video"),
   makeAnother: $("#make-another"),
-  helpButton: $("#help-button"),
-  closeHelp: $("#close-help"),
-  helpPanel: $("#help-panel"),
+
+  generateButton: $("#generate-button"),
+  generateLabel: $("#generate-label"),
+  statusLine: $("#status-line"),
+
+  scrim: $("#scrim"),
+  historyButton: $("#history-button"),
+  historyDrawer: $("#history-drawer"),
+  closeHistory: $("#close-history"),
+  historyList: $("#history-list"),
+  historyEmpty: $("#history-empty"),
+  settingsButton: $("#settings-button"),
+  settingsDrawer: $("#settings-drawer"),
+  closeSettings: $("#close-settings"),
+  accessState: $("#access-state"),
+  accessError: $("#access-error"),
+  apiKey: $("#venice-api-key"),
+  useApiKey: $("#use-api-key"),
+  sharedPassword: $("#shared-password"),
+  unlockShared: $("#unlock-shared"),
+  clearAccess: $("#clear-access"),
   toast: $("#toast")
 };
 
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_REFERENCES = 3;
+const DRAFT_KEY = "roam-video-draft";
+const ACTIVE_JOB_KEY = "roam-active-video-job";
+const LATEST_VIDEO_KEY = "roam-latest-video";
+const HISTORY_KEY = "roam-video-history";
+const PERSONAL_KEY_SESSION = "roam-personal-venice-key";
+const HISTORY_LIMIT = 20;
+
+const MODE_KINDS = { image: ["image", "transition", "reference"], text: ["text"], video: ["video"] };
+const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif";
+const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm";
+
+const DEFAULT_OPTIONS = {
+  durations: ["5s", "10s"],
+  aspectRatios: ["9:16", "16:9", "1:1"],
+  resolutions: ["720p"],
+  aspectRatioConfigurable: true,
+  resolutionConfigurable: true,
+  audioAvailable: true,
+  audioConfigurable: true,
+  promptCharacterLimit: 2500,
+  upscaleFactors: []
+};
+
+// Used only before the live Venice catalog loads. These are server-side profile ids,
+// not model identifiers, so the server still resolves the real model from its catalog.
 const fallbackProfiles = [
-  { id: "fast", name: "Fast draft", provider: "LTX Video 2.3 Fast", description: "Quick tests and simple scenes.", privacy: "Anonymized", supportsText: true, supportsPhoto: true, textOptions: { durations: ["10s"], aspectRatios: ["9:16", "16:9", "1:1"], audioConfigurable: true }, photoOptions: { durations: ["10s"], aspectRatios: ["9:16", "16:9", "1:1"], audioConfigurable: true } },
-  { id: "movement", name: "Natural movement", provider: "HappyHorse 1.1", description: "People, animals, and lively movement.", privacy: "Anonymized", supportsText: true, supportsPhoto: true },
-  { id: "seedance", name: "Cinematic precision", provider: "Seedance 2.0", description: "Detailed shots, lighting, camera direction, and native audio.", privacy: "Anonymized", supportsText: true, supportsPhoto: true },
-  { id: "grok-private", name: "Mood and emotion", provider: "Grok Imagine Private", description: "Private, conversational storytelling with human emotion and atmosphere.", privacy: "Private", supportsText: true, supportsPhoto: true },
-  { id: "grok-15-private", name: "Grok Imagine 1.5 Private", provider: "Grok Imagine 1.5 Private", description: "Private photo animation with a strong starting image.", privacy: "Private · Photo required", supportsText: false, supportsPhoto: true },
-  { id: "kling", name: "Polished production", provider: "Kling O3 Standard", description: "Balanced quality and speed for refined camera work.", privacy: "Anonymized", supportsText: true, supportsPhoto: true },
-  { id: "wan-unrestricted", name: "Uncensored creative", provider: "Wan 2.7 Uncensored", description: "Venice's uncensored option for explicit, detailed creative direction.", privacy: "Anonymized · Uncensored", supportsText: true, supportsPhoto: true },
-  { id: "wan-private", name: "Private photo motion", provider: "Wan 2.1 Pro", description: "Private image-to-video when you want to animate a supplied frame.", privacy: "Private · Photo required", supportsText: false, supportsPhoto: true }
+  { profileId: "fast", name: "Fast draft — LTX 2.3 Fast", bestFor: "Quick tests and simple scenes.", privacy: "Anonymized", text: true, image: true },
+  { profileId: "movement", name: "Natural movement — HappyHorse 1.1", bestFor: "People, animals, and lively movement.", privacy: "Anonymized", text: true, image: true },
+  { profileId: "seedance", name: "Cinematic — Seedance 2.0", bestFor: "Detailed shots, lighting, and camera direction.", privacy: "Anonymized", text: true, image: true },
+  { profileId: "grok-private", name: "Mood — Grok Imagine Private", bestFor: "Private, expressive storytelling.", privacy: "Private", text: true, image: true },
+  { profileId: "kling", name: "Polished — Kling O3 Standard", bestFor: "Balanced quality and refined camera work.", privacy: "Anonymized", text: true, image: true },
+  { profileId: "wan-unrestricted", name: "Uncensored — Wan 2.7", bestFor: "Explicit, detailed creative direction.", privacy: "Anonymized · Uncensored", text: true, image: true }
 ];
 
 const state = {
+  mode: "image",
+  catalog: [],
+  live: false,
+  modelByMode: { image: null, text: null, video: null },
   ratio: "9:16",
   duration: "5s",
   resolution: "720p",
   upscaleFactor: "2",
   audio: true,
-  profile: "fast",
-  profiles: fallbackProfiles,
-  advancedModels: [],
-  modelId: null,
   personalApiKey: "",
   sharedAccess: false,
   file: null,
-  mediaToken: null,
   mediaKind: null,
-  endMediaToken: null,
-  endPreviewUrl: null,
+  mediaToken: null,
   previewUrl: null,
-  quoteSignature: null,
+  endMediaToken: null,
+  referenceMediaTokens: [],
   quote: null,
+  quoteSignature: null,
+  phase: "idle",
   job: null,
+  jobStatus: null,
   resultUrl: null,
   pollTimer: null,
-  processingTimer: null,
-  processingStartedAt: null,
-  processingPhase: "submitted",
+  clockTimer: null,
+  startedAt: null,
+  finishedIn: null,
+  errorText: "",
   statusFailureCount: 0,
-  lastConfirmedStatusAt: null
+  openDrawer: null
 };
 
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
-const DRAFT_KEY = "roam-video-draft";
-const ACTIVE_JOB_KEY = "roam-active-video-job";
-const LATEST_VIDEO_KEY = "roam-latest-video";
-const PERSONAL_KEY_SESSION = "roam-personal-venice-key";
+/* ------------------------------------------------------------------ helpers */
 
-function getSettings() {
-  return {
-    prompt: elements.prompt.value.trim(), profile: state.profile, modelId: state.modelId,
-    duration: state.duration, aspectRatio: state.ratio, resolution: state.resolution,
-    upscaleFactor: state.upscaleFactor, audio: state.audio, hasImage: Boolean(state.mediaToken)
-  };
+const safeStorage = (action) => { try { return action(); } catch { return null; } };
+const setText = (node, value) => { node.textContent = value || ""; };
+const currency = (value) => new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(value);
+
+let toastTimer;
+function showToast(message) {
+  clearTimeout(toastTimer);
+  el.toast.hidden = false;
+  el.toast.textContent = message;
+  toastTimer = setTimeout(() => { el.toast.hidden = true; }, 4200);
 }
 
-function quoteSignature() {
-  const { profile, modelId, duration, aspectRatio, resolution, upscaleFactor, audio, hasImage } = getSettings();
-  return JSON.stringify({ profile, modelId, duration, aspectRatio, resolution, upscaleFactor, audio, hasImage });
+function formatElapsed(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function safeStorage(action) {
-  try { return action(); } catch { return null; }
+function applyPreviewRatio(ratio) {
+  const [width, height] = String(ratio || "9:16").split(":").map(Number);
+  const valid = width > 0 && height > 0;
+  el.previewFrame.style.setProperty("--preview-ratio", valid ? `${width} / ${height}` : "9 / 16");
+  el.previewFrame.style.setProperty("--preview-ar", String(valid ? width / height : 0.5625));
 }
 
-function accessHeaders() {
-  return state.personalApiKey ? { "X-Venice-API-Key": state.personalApiKey } : {};
-}
+/* ------------------------------------------------------------------- access */
 
-function hasAccess() {
-  return Boolean(state.personalApiKey || state.sharedAccess);
-}
+const accessHeaders = () => (state.personalApiKey ? { "X-Venice-API-Key": state.personalApiKey } : {});
+const hasAccess = () => Boolean(state.personalApiKey || state.sharedAccess);
 
-function updateAccessPresentation() {
-  const usingPersonalKey = Boolean(state.personalApiKey);
-  const message = usingPersonalKey ? "Using your Venice key for this session" : state.sharedAccess ? "Shared studio unlocked on this device" : "Not connected";
-  setText(elements.accessState, message);
-  const connected = hasAccess();
-  elements.accessCard.hidden = connected;
-  elements.clearAccess.hidden = !connected;
-  elements.clearAccess.textContent = usingPersonalKey ? "Key connected · change" : "Studio unlocked · change";
-}
-
-function requireAccess() {
-  if (hasAccess()) return true;
-  setText(elements.accessError, "Enter your Venice API key or unlock the shared studio before continuing.");
-  elements.accessCard.scrollIntoView({ behavior: "smooth", block: "center" });
-  elements.apiKey.focus({ preventScroll: true });
-  return false;
+function renderAccess() {
+  const usingKey = Boolean(state.personalApiKey);
+  setText(el.accessState, usingKey ? "CONNECTED · YOUR VENICE KEY" : state.sharedAccess ? "CONNECTED · SHARED STUDIO" : "NOT CONNECTED");
+  el.accessState.style.color = hasAccess() ? "var(--accent)" : "var(--warning)";
+  el.clearAccess.hidden = !hasAccess();
+  el.settingsButton.classList.toggle("is-alert", !hasAccess());
 }
 
 async function usePersonalApiKey() {
-  const key = elements.apiKey.value.trim();
-  if (!key) {
-    setText(elements.accessError, "Paste your Venice API key first.");
-    elements.apiKey.focus();
-    return;
-  }
+  const key = el.apiKey.value.trim();
+  if (!key) { setText(el.accessError, "Paste your Venice API key first."); el.apiKey.focus(); return; }
   state.personalApiKey = key;
   safeStorage(() => sessionStorage.setItem(PERSONAL_KEY_SESSION, key));
-  elements.apiKey.value = "";
-  setText(elements.accessError, "");
-  updateAccessPresentation();
-  await loadProfiles();
+  el.apiKey.value = "";
+  setText(el.accessError, "");
+  renderAccess();
+  await loadCatalog();
+  closeDrawer();
+  renderDock();
 }
 
 async function unlockSharedStudio() {
-  const password = elements.sharedPassword.value;
-  if (!password) {
-    setText(elements.accessError, "Enter the shared studio password first.");
-    elements.sharedPassword.focus();
-    return;
-  }
-  elements.unlockShared.disabled = true;
+  const password = el.sharedPassword.value;
+  if (!password) { setText(el.accessError, "Enter the shared studio password first."); el.sharedPassword.focus(); return; }
+  el.unlockShared.disabled = true;
   try {
     const response = await fetch("/api/access/unlock", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "Could not unlock the shared studio.");
     state.sharedAccess = true;
-    elements.sharedPassword.value = "";
-    setText(elements.accessError, "");
-    updateAccessPresentation();
-    await loadProfiles();
+    el.sharedPassword.value = "";
+    setText(el.accessError, "");
+    renderAccess();
+    await loadCatalog();
+    closeDrawer();
+    renderDock();
   } catch (error) {
-    setText(elements.accessError, error instanceof Error ? error.message : "Could not unlock the shared studio.");
+    setText(el.accessError, error instanceof Error ? error.message : "Could not unlock the shared studio.");
   } finally {
-    elements.unlockShared.disabled = false;
+    el.unlockShared.disabled = false;
   }
 }
 
@@ -210,13 +236,11 @@ async function clearAccess() {
   state.sharedAccess = false;
   safeStorage(() => sessionStorage.removeItem(PERSONAL_KEY_SESSION));
   await fetch("/api/access/logout", { method: "POST" }).catch(() => undefined);
-  updateAccessPresentation();
-  setText(elements.accessError, "");
-  state.profiles = fallbackProfiles;
-  state.advancedModels = [];
-  state.modelId = null;
-  renderAdvancedModels();
-  renderProfiles();
+  state.catalog = [];
+  state.live = false;
+  setText(el.accessError, "");
+  renderAccess();
+  renderModels();
   invalidateQuote();
 }
 
@@ -229,69 +253,106 @@ async function restoreAccess() {
   } catch {
     state.sharedAccess = false;
   }
-  updateAccessPresentation();
+  renderAccess();
 }
 
-function setText(element, message) {
-  element.textContent = message || "";
+function requireAccess() {
+  if (hasAccess()) return true;
+  openDrawer(el.settingsDrawer);
+  setText(el.accessError, "Connect a Venice API key or unlock the shared studio to continue.");
+  return false;
 }
 
-let toastTimer;
-function showToast(message) {
-  clearTimeout(toastTimer);
-  elements.toast.hidden = false;
-  elements.toast.textContent = message;
-  toastTimer = setTimeout(() => { elements.toast.hidden = true; }, 4200);
-}
+/* ------------------------------------------------------------------ catalog */
 
-function showReview(name) {
-  [elements.reviewEmpty, elements.reviewQuote, elements.reviewProcessing, elements.reviewComplete].forEach((panel) => { panel.hidden = panel !== name; });
-}
-
-function saveDraft() {
-  const draft = { prompt: elements.prompt.value, profile: state.profile, modelId: state.modelId, ratio: state.ratio, duration: state.duration, resolution: state.resolution, upscaleFactor: state.upscaleFactor, audio: state.audio };
-  if (safeStorage(() => localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))) !== null) {
-    setText(elements.draftStatus, "Saved on this device");
-    window.setTimeout(() => setText(elements.draftStatus, ""), 1600);
+async function loadCatalog() {
+  if (!hasAccess()) return;
+  try {
+    const response = await fetch("/api/video/models", { cache: "no-store", headers: accessHeaders() });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !Array.isArray(data.advancedModels)) return;
+    state.catalog = data.advancedModels;
+    state.live = data.live === true && data.advancedModels.length > 0;
+    renderModels();
+  } catch {
+    // The console keeps working with the local fallback list until the server answers.
   }
 }
 
-function restoreDraft() {
-  const saved = safeStorage(() => JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"));
-  if (!saved) return;
-  elements.prompt.value = typeof saved.prompt === "string" ? saved.prompt : "";
-  if (fallbackProfiles.some((profile) => profile.id === saved.profile)) state.profile = saved.profile;
-  if (typeof saved.modelId === "string") state.modelId = saved.modelId;
-  if (typeof saved.ratio === "string") state.ratio = saved.ratio;
-  if (typeof saved.duration === "string") state.duration = saved.duration;
-  if (typeof saved.resolution === "string") state.resolution = saved.resolution;
-  if (typeof saved.upscaleFactor === "string") state.upscaleFactor = saved.upscaleFactor;
-  state.audio = saved.audio !== false;
-  $("#audio").checked = state.audio;
-  updatePromptCount();
-}
-
-function selectedProfile() {
-  if (state.modelId) {
-    const advanced = state.advancedModels.find((model) => model.id === state.modelId);
-    if (advanced) return advanced;
+function modelsForMode(mode) {
+  const kinds = MODE_KINDS[mode] || MODE_KINDS.image;
+  if (state.live) {
+    return state.catalog
+      .filter((model) => kinds.includes(model.inputKind))
+      .map((model) => ({
+        id: model.id,
+        name: model.name || model.id,
+        bestFor: model.bestFor || model.description || "",
+        privacy: model.privacy || "",
+        inputKind: model.inputKind,
+        beta: model.beta === true,
+        recommended: model.recommended === true,
+        options: { ...DEFAULT_OPTIONS, ...(model.options || {}) }
+      }))
+      .sort((a, b) => Number(b.recommended) - Number(a.recommended));
   }
-  return state.profiles.find((profile) => profile.id === state.profile) || state.profiles[0];
+  if (mode === "video") return [];
+  return fallbackProfiles
+    .filter((profile) => profile[mode === "image" ? "image" : "text"])
+    .map((profile) => ({
+      id: `profile:${profile.profileId}`,
+      profileId: profile.profileId,
+      name: profile.name,
+      bestFor: profile.bestFor,
+      privacy: profile.privacy,
+      inputKind: mode === "image" ? "image" : "text",
+      beta: false,
+      recommended: true,
+      options: { ...DEFAULT_OPTIONS }
+    }));
 }
 
-function profileSupportsCurrentSource(profile) {
-  return state.file ? profile.supportsPhoto !== false : profile.supportsText !== false;
+function currentModel() {
+  const models = modelsForMode(state.mode);
+  if (!models.length) return null;
+  return models.find((model) => model.id === state.modelByMode[state.mode]) || models[0];
 }
 
-function selectedModelOptions() {
-  const profile = selectedProfile();
-  if (!profile) return null;
-  if (state.modelId) return profile.options || null;
-  return state.file ? profile.photoOptions || null : profile.textOptions || null;
-}
+const currentOptions = () => currentModel()?.options || DEFAULT_OPTIONS;
+const currentInputKind = () => currentModel()?.inputKind || (state.mode === "text" ? "text" : state.mode);
 
-function selectedInputKind() {
-  return state.modelId ? selectedProfile()?.inputKind || "text" : state.file ? "image" : "text";
+function renderModels() {
+  const models = modelsForMode(state.mode);
+  const selectedId = currentModel()?.id || "";
+  state.modelByMode[state.mode] = selectedId || null;
+  el.modelSelect.replaceChildren();
+
+  if (!models.length) {
+    const option = document.createElement("option");
+    option.textContent = hasAccess() ? "No models available" : "Connect to load models";
+    el.modelSelect.append(option);
+    el.modelSelect.disabled = true;
+  } else {
+    el.modelSelect.disabled = false;
+    const groups = [
+      ["RECOMMENDED", models.filter((model) => model.recommended)],
+      [state.live ? "ALL VENICE MODELS" : "MORE", models.filter((model) => !model.recommended)]
+    ];
+    for (const [label, entries] of groups) {
+      if (!entries.length) continue;
+      const group = document.createElement("optgroup");
+      group.label = label;
+      for (const model of entries) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = `${model.name}${model.beta ? " · beta" : ""}`;
+        group.append(option);
+      }
+      el.modelSelect.append(group);
+    }
+    el.modelSelect.value = selectedId;
+  }
+  syncOptions();
 }
 
 function fillSelect(select, values, selected, label) {
@@ -305,170 +366,160 @@ function fillSelect(select, values, selected, label) {
   select.value = selected;
 }
 
-function updateSourcePresentation() {
-  const inputKind = selectedInputKind();
-  const needsVideo = inputKind === "video";
-  const needsTransitionEnd = inputKind === "transition";
-  const sourceCopy = needsVideo
-    ? { label: "Start with a video", title: "Improve or restyle a video", description: "MP4, MOV, or WebM, up to 25 MB.", choose: "Choose video" }
-    : inputKind === "reference"
-      ? { label: "Add a reference image", title: "Give the model a visual reference", description: "JPG, PNG, WebP, or GIF, up to 25 MB.", choose: "Choose image" }
-      : inputKind === "transition"
-        ? { label: "Choose the first transition image", title: "Create a transition between two images", description: "Add this image, then choose the ending image below.", choose: "Choose first image" }
-        : { label: "Start with a photo", title: "Bring a photo to life", description: "JPG, PNG, WebP, or GIF, up to 25 MB.", choose: "Choose photo" };
-  elements.sourceLabel.innerHTML = `${sourceCopy.label}${inputKind === "text" ? ' <span class="optional">optional</span>' : ""}`;
-  elements.uploadTitle.textContent = sourceCopy.title;
-  elements.uploadDescription.textContent = sourceCopy.description;
-  elements.chooseFileLabel.textContent = sourceCopy.choose;
-  elements.pasteMedia.hidden = needsVideo;
-  elements.cameraLabel.hidden = needsVideo || inputKind === "reference" || inputKind === "transition";
-  elements.endMedia.hidden = !needsTransitionEnd;
-  if (!needsTransitionEnd) {
-    state.endMediaToken = null;
-    if (state.endPreviewUrl) URL.revokeObjectURL(state.endPreviewUrl);
-    state.endPreviewUrl = null;
-    elements.endPhotoInput.value = "";
-    elements.endMediaStatus.textContent = "Choose the last frame.";
-  }
-}
+function syncOptions() {
+  const model = currentModel();
+  const options = currentOptions();
+  const durations = options.durations?.length ? options.durations : DEFAULT_OPTIONS.durations;
+  const ratios = options.aspectRatios || [];
+  const resolutions = options.resolutions || [];
+  const upscales = options.upscaleFactors || [];
 
-function applyModelOptions() {
-  const options = selectedModelOptions();
-  const durations = options?.durations?.length ? options.durations : ["5s", "10s"];
-  const aspectRatios = options?.aspectRatios || ["9:16", "16:9", "1:1"];
-  const resolutions = options?.resolutions || ["720p"];
-  const upscaleFactors = options?.upscaleFactors || [];
-  let changed = false;
-  if (!durations.includes(state.duration)) { state.duration = durations[0]; changed = true; }
-  if (aspectRatios.length && !aspectRatios.includes(state.ratio)) { state.ratio = aspectRatios[0]; changed = true; }
-  if (resolutions.length && !resolutions.includes(state.resolution)) { state.resolution = resolutions[0]; changed = true; }
-  if (upscaleFactors.length && !upscaleFactors.includes(state.upscaleFactor)) { state.upscaleFactor = upscaleFactors[0]; changed = true; }
-  const audioConfigurable = options?.audioConfigurable === true;
-  const audioAvailable = options?.audioAvailable === true;
-  if (!audioConfigurable && state.audio !== audioAvailable) { state.audio = audioAvailable; changed = true; }
-  const promptLimit = options?.promptCharacterLimit || 2500;
-  elements.prompt.maxLength = String(promptLimit);
-  fillSelect(elements.durationSelect, durations, state.duration, (value) => value.replace("s", " sec"));
-  fillSelect(elements.ratioSelect, aspectRatios, state.ratio, (value) => value);
-  fillSelect(elements.resolutionSelect, resolutions, state.resolution, (value) => value);
-  fillSelect(elements.upscaleSelect, upscaleFactors, state.upscaleFactor, (value) => `${value}×`);
-  elements.ratioSetting.hidden = !(options?.aspectRatioConfigurable !== false && aspectRatios.length);
-  elements.resolutionSetting.hidden = !(options?.resolutionConfigurable !== false && resolutions.length);
-  elements.upscaleSetting.hidden = !upscaleFactors.length;
-  $("#audio").checked = state.audio;
-  $("#audio").disabled = !audioConfigurable;
-  $("#audio").closest(".toggle-line")?.classList.toggle("is-unavailable", !audioConfigurable);
-  updateSourcePresentation();
+  if (!durations.includes(state.duration)) state.duration = durations[0];
+  if (ratios.length && !ratios.includes(state.ratio)) state.ratio = ratios[0];
+  if (resolutions.length && !resolutions.includes(state.resolution)) state.resolution = resolutions[0];
+  if (upscales.length && !upscales.includes(state.upscaleFactor)) state.upscaleFactor = upscales[0];
+
+  const audioConfigurable = options.audioConfigurable === true;
+  if (!audioConfigurable) state.audio = options.audioAvailable === true;
+
+  fillSelect(el.durationSelect, durations, state.duration, (value) => (value === "Auto" ? "Auto" : value.replace("s", " sec")));
+  fillSelect(el.ratioSelect, ratios, state.ratio, (value) => `${value}${value === "9:16" ? " tall" : value === "16:9" ? " wide" : value === "1:1" ? " square" : ""}`);
+  fillSelect(el.resolutionSelect, resolutions, state.resolution, (value) => value);
+  fillSelect(el.upscaleSelect, upscales, state.upscaleFactor, (value) => `${value}× sharper`);
+
+  el.ratioControl.hidden = !(options.aspectRatioConfigurable && ratios.length);
+  el.resolutionControl.hidden = !(options.resolutionConfigurable && resolutions.length);
+  el.upscaleControl.hidden = !upscales.length;
+  el.durationControl.hidden = durations.length <= 1 && durations[0] === "Auto" && upscales.length > 0;
+
+  el.audio.checked = state.audio;
+  el.audio.disabled = !audioConfigurable;
+  el.audioRow.classList.toggle("is-unavailable", !audioConfigurable);
+  setText(el.audioNote, audioConfigurable ? "This model can generate its own sound." : options.audioAvailable ? "This model always returns sound." : "This model does not generate sound.");
+
+  const limit = options.promptCharacterLimit || 2500;
+  el.prompt.maxLength = String(limit);
   updatePromptCount();
-  return changed;
-}
 
-function renderProfiles() {
-  const current = selectedProfile();
-  if (!current) return;
-  elements.modelPicker.replaceChildren();
-  for (const profile of state.profiles) {
-    const button = document.createElement("button");
-    const supported = profileSupportsCurrentSource(profile);
-    button.type = "button";
-    button.dataset.profile = profile.id;
-    button.className = "model-card";
-    button.disabled = !supported;
-    button.setAttribute("aria-pressed", String(!state.modelId && profile.id === state.profile));
-    const name = document.createElement("strong");
-    name.textContent = profile.name;
-    const provider = document.createElement("span");
-    provider.className = "model-provider";
-    provider.textContent = profile.provider;
-    const privacy = document.createElement("span");
-    privacy.className = "model-privacy";
-    privacy.textContent = profile.privacy || "Check Venice settings";
-    const description = document.createElement("span");
-    description.className = "model-description";
-    description.textContent = supported ? profile.description : "This option needs a different starting point.";
-    button.append(name, provider, privacy, description);
-    elements.modelPicker.append(button);
+  applyPreviewRatio(ratios.length ? state.ratio : "16:9");
+
+  if (model) {
+    const requirement = {
+      text: "Starts from your words only.",
+      image: "Needs one starting image.",
+      transition: "Needs a first and a last image.",
+      reference: "Needs a reference image to keep the subject consistent.",
+      video: "Needs a source video."
+    }[model.inputKind] || "";
+    el.modelHint.innerHTML = "";
+    el.modelHint.append(document.createTextNode("Good for: "));
+    const strong = document.createElement("b");
+    strong.textContent = model.bestFor || "general video generation.";
+    el.modelHint.append(strong, document.createTextNode(` ${requirement}`));
+  } else {
+    setText(el.modelHint, hasAccess() ? "No model in this mode right now." : "Connect in Settings to load the live Venice model list.");
   }
-  const options = selectedModelOptions();
-  const durationNote = options?.durations?.length ? ` Available here: ${options.durations.join(" or ")}.` : "";
-  elements.modelNote.textContent = `${current.name} uses ${current.provider || "the Venice API"}. ${current.description}${durationNote}`;
+
+  renderSpec(model, options);
+  renderSource();
+  renderDock();
 }
 
-function renderAdvancedModels() {
-  elements.advancedModel.replaceChildren();
-  const recommended = document.createElement("option");
-  recommended.value = "";
-  recommended.textContent = "Use a recommended model above";
-  elements.advancedModel.append(recommended);
-  if (!state.advancedModels.length) {
-    elements.advancedModelNote.textContent = "Connect with a Venice key or the shared studio password to load the current catalog.";
+function renderSpec(model, options) {
+  el.modelSpec.replaceChildren();
+  if (!model) return;
+  const rows = [
+    ["Model ID", model.profileId ? "resolved by the server" : model.id],
+    ["Privacy", model.privacy || "See Venice settings"],
+    ["Lengths", (options.durations || []).join(", ") || "—"],
+    ["Shapes", (options.aspectRatios || []).join(", ") || "Fixed by the model"],
+    ["Quality", (options.resolutions || []).join(", ") || (options.upscaleFactors || []).map((value) => `${value}×`).join(", ") || "Fixed by the model"],
+    ["Sound", options.audioConfigurable ? "Optional" : options.audioAvailable ? "Always on" : "None"],
+    ["Prompt limit", `${(options.promptCharacterLimit || 2500).toLocaleString()} chars`]
+  ];
+  for (const [term, value] of rows) {
+    const wrap = document.createElement("div");
+    const dt = document.createElement("dt");
+    dt.textContent = term;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    wrap.append(dt, dd);
+    el.modelSpec.append(wrap);
+  }
+}
+
+/* -------------------------------------------------------------------- modes */
+
+function setMode(mode) {
+  if (!MODE_KINDS[mode] || mode === state.mode) return;
+  state.mode = mode;
+  for (const tab of el.modeTabs) tab.setAttribute("aria-selected", String(tab.dataset.mode === mode));
+  const wantedKind = mode === "video" ? "video" : "image";
+  if (state.file && state.mediaKind !== wantedKind) clearMedia();
+  renderModels();
+  saveDraft();
+  invalidateQuote();
+}
+
+function renderSource() {
+  const kind = currentInputKind();
+  const needsVideo = kind === "video";
+  el.sourcePanel.hidden = kind === "text";
+  if (kind === "text") { renderExtraFrames(kind); return; }
+
+  const copy = {
+    image: { title: "STARTING IMAGE", upload: "Add the photo to animate", detail: "JPG, PNG, WebP or GIF · max 25 MB", choose: "CHOOSE PHOTO" },
+    transition: { title: "FIRST IMAGE", upload: "Add the opening frame", detail: "The ending frame is set just below.", choose: "CHOOSE FIRST" },
+    reference: { title: "REFERENCE IMAGE", upload: "Add the subject to keep consistent", detail: "JPG, PNG, WebP or GIF · max 25 MB", choose: "CHOOSE IMAGE" },
+    video: { title: "SOURCE VIDEO", upload: "Add the video to work from", detail: "MP4, MOV or WebM · max 25 MB", choose: "CHOOSE VIDEO" }
+  }[kind];
+
+  setText(el.sourceTitle, copy.title);
+  setText(el.uploadTitle, copy.upload);
+  setText(el.uploadDescription, copy.detail);
+  setText(el.chooseFileLabel, copy.choose);
+  el.sourceTag.textContent = "REQUIRED";
+  el.sourceTag.className = "tag tag-required";
+  el.cameraLabel.hidden = needsVideo;
+  el.pasteMedia.hidden = needsVideo;
+  el.photoInput.accept = needsVideo ? VIDEO_ACCEPT : IMAGE_ACCEPT;
+  renderExtraFrames(kind);
+}
+
+function renderExtraFrames(kind) {
+  const showExtra = kind === "transition" || kind === "reference";
+  el.extraFrames.hidden = !showExtra;
+  if (!showExtra) {
+    state.endMediaToken = null;
+    state.referenceMediaTokens = [];
+    el.extraFile.value = "";
     return;
   }
-  for (const model of state.advancedModels) {
-    const option = document.createElement("option");
-    option.value = model.id;
-    const input = model.inputKind === "video" ? "video" : model.inputKind === "transition" ? "two images" : model.inputKind === "reference" ? "references" : model.inputKind === "image" ? "image" : "text";
-    option.textContent = `${model.name}${model.beta ? " (beta)" : ""} / ${input} / ${model.privacy}`;
-    elements.advancedModel.append(option);
-  }
-  const selected = state.advancedModels.find((model) => model.id === state.modelId);
-  if (selected) {
-    elements.advancedModel.value = selected.id;
-    const sourceHint = selected.inputKind === "video" ? "Upload an MP4, MOV, or WebM." : selected.inputKind === "transition" ? "Upload a start and ending image." : selected.inputKind === "reference" ? "Upload a reference image." : selected.inputKind === "image" ? "Upload a starting image." : "Start from your description.";
-    elements.advancedModelNote.textContent = `Great for: ${selected.bestFor || selected.description} ${sourceHint} ${selected.privacy === "private" ? "Private generation." : "Anonymized generation."}${selected.beta ? " Beta availability depends on the Venice key's access level." : ""}`;
-  } else {
-    state.modelId = null;
-    elements.advancedModel.value = "";
-    elements.advancedModelNote.textContent = "Every current Venice video model is listed. Choose one and we will show only the settings it accepts.";
-  }
+  el.extraFile.multiple = kind === "reference";
+  setText(el.extraLabel, kind === "transition" ? "ENDING FRAME" : `EXTRA REFERENCES (OPTIONAL · UP TO ${MAX_REFERENCES})`);
+  if (kind === "transition" && !state.endMediaToken) setText(el.extraStatus, "Choose the last frame of the transition.");
+  if (kind === "reference" && !state.referenceMediaTokens.length) setText(el.extraStatus, "More angles of the same subject improve consistency.");
 }
 
-async function loadProfiles() {
-  if (!hasAccess()) return;
-  try {
-    const response = await fetch("/api/video/models", { cache: "no-store", headers: accessHeaders() });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !Array.isArray(data.profiles) || data.profiles.length === 0) return;
-    state.profiles = data.profiles;
-    state.advancedModels = Array.isArray(data.advancedModels) ? data.advancedModels : [];
-    if (!state.profiles.some((profile) => profile.id === state.profile)) state.profile = state.profiles[0].id;
-    renderAdvancedModels();
-    applyModelOptions();
-    renderProfiles();
-  } catch {
-    // The safe local choices remain visible while the server reconnects.
-  }
-}
+/* -------------------------------------------------------------------- media */
 
-function updatePromptCount() {
-  elements.promptCount.textContent = `${elements.prompt.value.length.toLocaleString()} / ${Number(elements.prompt.maxLength || 2500).toLocaleString()}`;
-}
-
-function invalidateQuote() {
-  state.quote = null;
-  state.quoteSignature = null;
-  if (!state.job && !elements.reviewComplete.hidden) return;
-  if (!state.job) showReview(elements.reviewEmpty);
-}
-
-function cleanMedia() {
+function clearMedia() {
   if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   state.file = null;
-  state.mediaToken = null;
   state.mediaKind = null;
+  state.mediaToken = null;
   state.previewUrl = null;
-  elements.previewImage.removeAttribute("src");
-  elements.previewVideo.removeAttribute("src");
-  elements.previewImage.hidden = true;
-  elements.previewVideo.hidden = true;
-  elements.mediaPreview.hidden = true;
-  elements.uploadEmpty.hidden = false;
-  elements.photoInput.value = "";
-  elements.cameraInput.value = "";
-  setText(elements.mediaError, "");
-  applyModelOptions();
-  renderProfiles();
+  el.previewImage.removeAttribute("src");
+  el.previewVideo.removeAttribute("src");
+  el.previewImage.hidden = true;
+  el.previewVideo.hidden = true;
+  el.mediaPreview.hidden = true;
+  el.dropEmpty.hidden = false;
+  el.photoInput.value = "";
+  el.cameraInput.value = "";
+  setText(el.mediaError, "");
   invalidateQuote();
+  renderDock();
 }
 
 function mediaKindFor(file) {
@@ -477,17 +528,17 @@ function mediaKindFor(file) {
   return null;
 }
 
-function isSupportedMedia(file) {
+function mediaProblem(file) {
   const name = file.name.toLowerCase();
-  if (name.endsWith(".heic") || name.endsWith(".heif") || file.type === "image/heic" || file.type === "image/heif") return "This is a HEIC photo. Export or share it as JPG, PNG, or WebP, then try again.";
-  if (file.size > MAX_FILE_BYTES) return "This file is larger than 25 MB. Choose a smaller one, then try again.";
-  if (!mediaKindFor(file) || (!["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/quicktime", "video/webm"].includes(file.type) && !/\.(jpe?g|png|webp|gif|mp4|mov|webm)$/.test(name))) return "Use a JPG, PNG, WebP, GIF, MP4, MOV, or WebM file.";
+  if (name.endsWith(".heic") || name.endsWith(".heif") || file.type === "image/heic" || file.type === "image/heif") return "This is a HEIC photo. Share or export it as JPG, then try again.";
+  if (file.size > MAX_FILE_BYTES) return "This file is larger than 25 MB. Choose a smaller one.";
+  if (!mediaKindFor(file)) return "Use a JPG, PNG, WebP, GIF, MP4, MOV, or WebM file.";
   return "";
 }
 
-function mediaSize(bytes) {
-  return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
+const mediaSize = (bytes) => (bytes < 1024 * 1024
+  ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+  : `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`);
 
 async function uploadMedia(file) {
   const form = new FormData();
@@ -501,100 +552,287 @@ async function uploadMedia(file) {
 async function selectMedia(file) {
   if (!file) return;
   if (!requireAccess()) return;
-  const error = isSupportedMedia(file);
-  if (error) { setText(elements.mediaError, error); return; }
+  const problem = mediaProblem(file);
+  if (problem) { setText(el.mediaError, problem); return; }
   const kind = mediaKindFor(file);
-  const inputKind = selectedInputKind();
-  if (inputKind === "video" && kind !== "video") { setText(elements.mediaError, "This model needs an MP4, MOV, or WebM video."); return; }
-  if (inputKind !== "video" && kind !== "image") { setText(elements.mediaError, "This model needs a JPG, PNG, WebP, or GIF image."); return; }
-  cleanMedia();
+  const wanted = currentInputKind() === "video" ? "video" : "image";
+  if (kind !== wanted) {
+    setText(el.mediaError, wanted === "video" ? "This model needs an MP4, MOV, or WebM video." : "This model needs a JPG, PNG, WebP, or GIF image.");
+    return;
+  }
+  clearMedia();
   state.file = file;
   state.mediaKind = kind;
-  applyModelOptions();
-  renderProfiles();
   state.previewUrl = URL.createObjectURL(file);
-  elements.previewImage.hidden = kind !== "image";
-  elements.previewVideo.hidden = kind !== "video";
-  if (kind === "image") elements.previewImage.src = state.previewUrl;
-  else elements.previewVideo.src = state.previewUrl;
-  elements.mediaName.textContent = file.name || "File from clipboard";
-  elements.mediaDetail.textContent = `Preparing ${mediaSize(file.size)} for this video`;
-  elements.uploadEmpty.hidden = true;
-  elements.mediaPreview.hidden = false;
-  elements.quoteButton.disabled = true;
+  el.previewImage.hidden = kind !== "image";
+  el.previewVideo.hidden = kind !== "video";
+  if (kind === "image") el.previewImage.src = state.previewUrl;
+  else el.previewVideo.src = state.previewUrl;
+  setText(el.mediaName, file.name || "File from clipboard");
+  setText(el.mediaDetail, `Preparing ${mediaSize(file.size)}…`);
+  el.dropEmpty.hidden = true;
+  el.mediaPreview.hidden = false;
+  renderDock();
   try {
     const body = await uploadMedia(file);
     state.mediaToken = body.mediaToken;
     state.mediaKind = body.kind;
-    elements.mediaDetail.textContent = `${mediaSize(file.size)} ready for this model`;
-  } catch (uploadError) {
+    setText(el.mediaDetail, `${mediaSize(file.size)} · ready`);
+  } catch (error) {
     state.mediaToken = null;
-    setText(elements.mediaError, uploadError instanceof Error ? uploadError.message : "Could not prepare that file.");
-    elements.mediaDetail.textContent = "Choose another file to continue";
+    setText(el.mediaError, error instanceof Error ? error.message : "Could not prepare that file.");
+    setText(el.mediaDetail, "Choose another file");
   } finally {
-    elements.quoteButton.disabled = false;
+    invalidateQuote();
+    renderDock();
   }
 }
 
-async function selectEndPhoto(file) {
-  if (!file) return;
-  const error = isSupportedMedia(file);
-  if (error || mediaKindFor(file) !== "image") { setText(elements.mediaError, error || "The ending frame needs to be an image."); return; }
-  elements.endMediaStatus.textContent = "Preparing ending image…";
+async function selectExtraFiles(files) {
+  const list = [...(files || [])];
+  if (!list.length) return;
+  if (!requireAccess()) return;
+  const kind = currentInputKind();
+  for (const file of list) {
+    const problem = mediaProblem(file);
+    if (problem || mediaKindFor(file) !== "image") { setText(el.extraStatus, problem || "Extra frames must be images."); return; }
+  }
+  setText(el.extraStatus, "Preparing…");
   try {
-    const body = await uploadMedia(file);
-    state.endMediaToken = body.mediaToken;
-    if (state.endPreviewUrl) URL.revokeObjectURL(state.endPreviewUrl);
-    state.endPreviewUrl = URL.createObjectURL(file);
-    elements.endMediaStatus.textContent = `${file.name || "Ending image"} is ready.`;
+    if (kind === "transition") {
+      const body = await uploadMedia(list[0]);
+      state.endMediaToken = body.mediaToken;
+      setText(el.extraStatus, `${list[0].name || "Ending frame"} is ready.`);
+    } else {
+      const chosen = list.slice(0, MAX_REFERENCES);
+      const uploaded = await Promise.all(chosen.map((file) => uploadMedia(file)));
+      state.referenceMediaTokens = uploaded.map((body) => body.mediaToken);
+      setText(el.extraStatus, `${uploaded.length} extra reference${uploaded.length === 1 ? "" : "s"} ready.`);
+    }
     invalidateQuote();
   } catch (error) {
     state.endMediaToken = null;
-    elements.endMediaStatus.textContent = "Choose the last frame.";
-    setText(elements.mediaError, error instanceof Error ? error.message : "Could not prepare that ending image.");
+    state.referenceMediaTokens = [];
+    setText(el.extraStatus, error instanceof Error ? error.message : "Could not prepare those images.");
   }
 }
 
 async function readClipboardImage() {
-  if (!navigator.clipboard?.read) throw new Error("Use the normal Paste menu on your phone. Your browser does not offer image paste here.");
+  if (!navigator.clipboard?.read) throw new Error("Use your device's own Paste menu — this browser does not allow image paste here.");
   const items = await navigator.clipboard.read();
   for (const item of items) {
     const type = item.types.find((candidate) => candidate.startsWith("image/"));
-    if (type) {
-      const blob = await item.getType(type);
-      return new File([blob], `pasted-image.${type.split("/")[1] || "png"}`, { type });
-    }
+    if (type) return new File([await item.getType(type)], `pasted-image.${type.split("/")[1] || "png"}`, { type });
   }
-  throw new Error("Your clipboard does not have an image. Choose a photo instead.");
+  throw new Error("Your clipboard does not contain an image.");
 }
 
 async function pastePrompt() {
   try {
-    if (!navigator.clipboard?.readText) throw new Error("Use the normal Paste menu inside the description box.");
+    if (!navigator.clipboard?.readText) throw new Error("Use your device's Paste menu inside the prompt.");
     const text = await navigator.clipboard.readText();
-    if (!text) throw new Error("Your clipboard does not have text to paste.");
-    elements.prompt.setRangeText(text, elements.prompt.selectionStart, elements.prompt.selectionEnd, "end");
-    elements.prompt.focus();
-    updatePromptCount();
-    saveDraft();
+    if (!text) throw new Error("Your clipboard has no text.");
+    el.prompt.setRangeText(text, el.prompt.selectionStart, el.prompt.selectionEnd, "end");
+    el.prompt.focus();
+    onPromptInput();
   } catch (error) {
-    showToast(error instanceof Error ? error.message : "Use the normal Paste menu inside the description box.");
+    showToast(error instanceof Error ? error.message : "Use your device's Paste menu inside the prompt.");
   }
 }
 
-async function copyPrompt() {
-  const text = elements.prompt.value.trim();
-  if (!text) return showToast("Write your idea first, then you can copy it.");
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error("Clipboard writing is not available.");
-    await navigator.clipboard.writeText(text);
-    showToast("Idea copied.");
-  } catch {
-    elements.prompt.focus();
-    elements.prompt.select();
-    showToast("Your idea is selected. Use your phone's Copy menu.");
-  }
+/* --------------------------------------------------------------- draft/state */
+
+function updatePromptCount() {
+  const limit = Number(el.prompt.maxLength || 2500);
+  setText(el.promptCount, `${el.prompt.value.length.toLocaleString()} / ${limit.toLocaleString()}`);
 }
+
+function autoGrowPrompt() {
+  el.prompt.style.height = "auto";
+  el.prompt.style.height = `${Math.min(el.prompt.scrollHeight, window.innerHeight * 0.34)}px`;
+}
+
+function onPromptInput() {
+  updatePromptCount();
+  autoGrowPrompt();
+  saveDraft();
+  invalidateQuote();
+  renderDock();
+}
+
+function saveDraft() {
+  const draft = {
+    prompt: el.prompt.value,
+    negativePrompt: el.negativePrompt.value,
+    mode: state.mode,
+    modelByMode: state.modelByMode,
+    ratio: state.ratio,
+    duration: state.duration,
+    resolution: state.resolution,
+    upscaleFactor: state.upscaleFactor,
+    audio: state.audio
+  };
+  safeStorage(() => localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)));
+}
+
+function restoreDraft() {
+  const saved = safeStorage(() => JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"));
+  if (!saved) return;
+  if (typeof saved.prompt === "string") el.prompt.value = saved.prompt;
+  if (typeof saved.negativePrompt === "string") el.negativePrompt.value = saved.negativePrompt;
+  if (MODE_KINDS[saved.mode]) state.mode = saved.mode;
+  if (saved.modelByMode && typeof saved.modelByMode === "object") state.modelByMode = { ...state.modelByMode, ...saved.modelByMode };
+  if (typeof saved.ratio === "string") state.ratio = saved.ratio;
+  if (typeof saved.duration === "string") state.duration = saved.duration;
+  if (typeof saved.resolution === "string") state.resolution = saved.resolution;
+  if (typeof saved.upscaleFactor === "string") state.upscaleFactor = saved.upscaleFactor;
+  state.audio = saved.audio !== false;
+  for (const tab of el.modeTabs) tab.setAttribute("aria-selected", String(tab.dataset.mode === state.mode));
+}
+
+function requestSettings() {
+  const model = currentModel();
+  return {
+    prompt: el.prompt.value.trim(),
+    negativePrompt: el.negativePrompt.value.trim(),
+    profile: model?.profileId || "fast",
+    modelId: model?.profileId ? null : model?.id || null,
+    duration: state.duration,
+    aspectRatio: state.ratio,
+    resolution: state.resolution,
+    upscaleFactor: state.upscaleFactor,
+    audio: state.audio,
+    hasImage: currentInputKind() !== "text"
+  };
+}
+
+function quoteSignature() {
+  const { profile, modelId, duration, aspectRatio, resolution, upscaleFactor, audio, hasImage } = requestSettings();
+  return JSON.stringify({ profile, modelId, duration, aspectRatio, resolution, upscaleFactor, audio, hasImage });
+}
+
+function invalidateQuote() {
+  state.quote = null;
+  state.quoteSignature = null;
+  if (state.phase === "quoted") state.phase = "idle";
+  renderDock();
+}
+
+/* ------------------------------------------------------------ readiness/dock */
+
+function readiness() {
+  if (!hasAccess()) return { ok: false, message: "Connect a Venice key or the shared studio to begin." };
+  if (!currentModel()) return { ok: false, message: "No model available for this mode." };
+  if (!el.prompt.value.trim()) return { ok: false, message: "Describe the video to begin." };
+  const kind = currentInputKind();
+  if (kind !== "text" && !state.mediaToken) {
+    return { ok: false, message: state.file ? "Preparing your file…" : kind === "video" ? "Add the source video." : "Add the starting image." };
+  }
+  if (kind === "transition" && !state.endMediaToken) return { ok: false, message: "Add the ending frame." };
+  return { ok: true, message: "Ready to generate" };
+}
+
+function renderDock() {
+  const busy = ["quoting", "submitting", "queued", "rendering", "saving"].includes(state.phase);
+  const button = el.generateButton;
+  button.classList.remove("is-confirm", "is-busy");
+  el.statusLine.classList.remove("is-error", "is-good");
+
+  if (busy) {
+    button.disabled = true;
+    button.classList.add("is-busy");
+    setText(el.generateLabel, state.phase === "quoting" ? "PRICING…" : state.phase === "submitting" ? "SENDING…" : progressLabel());
+    setText(el.statusLine, busyStatus());
+    return;
+  }
+
+  const ready = readiness();
+  if (state.phase === "quoted" && state.quote !== null) {
+    button.disabled = false;
+    button.classList.add("is-confirm");
+    setText(el.generateLabel, `CONFIRM · ${currency(state.quote)}`);
+    setText(el.statusLine, "Exact Venice price. Press again to start.");
+    return;
+  }
+  if (state.phase === "failed") {
+    button.disabled = !ready.ok;
+    setText(el.generateLabel, "RETRY");
+    setText(el.statusLine, state.errorText || "Generation failed.");
+    el.statusLine.classList.add("is-error");
+    return;
+  }
+  button.disabled = !ready.ok;
+  setText(el.generateLabel, "GENERATE");
+  if (state.phase === "done") {
+    setText(el.statusLine, state.finishedIn ? `Completed in ${formatElapsed(state.finishedIn)}` : "Completed");
+    el.statusLine.classList.add("is-good");
+    return;
+  }
+  setText(el.statusLine, ready.message);
+  if (!ready.ok && !hasAccess()) el.statusLine.classList.add("is-error");
+}
+
+function progressPercent() {
+  const { averageExecutionTime, executionDuration } = state.jobStatus || {};
+  if (averageExecutionTime && executionDuration) return Math.min(95, Math.round((executionDuration / averageExecutionTime) * 100));
+  if (state.startedAt) return Math.min(90, Math.round(((Date.now() - state.startedAt) / 120_000) * 100));
+  return 5;
+}
+
+function progressLabel() {
+  if (state.phase === "saving") return "SAVING…";
+  if (state.phase === "queued") return "QUEUED…";
+  return `RENDERING ${progressPercent()}%`;
+}
+
+function busyStatus() {
+  if (state.phase === "quoting") return "Asking Venice for the exact price…";
+  if (state.phase === "submitting") return "Submitting to Venice…";
+  const elapsed = state.startedAt ? formatElapsed(Date.now() - state.startedAt) : "0:00";
+  const { averageExecutionTime } = state.jobStatus || {};
+  const estimate = averageExecutionTime ? ` · usually ~${Math.max(1, Math.round(averageExecutionTime / 60_000))} min` : "";
+  return `${state.phase === "queued" ? "Waiting for a Venice worker" : "Rendering"} · ${elapsed}${estimate}`;
+}
+
+/* ------------------------------------------------------------------- preview */
+
+function showPreview(which) {
+  el.previewEmpty.hidden = which !== "empty";
+  el.previewLoading.hidden = which !== "loading";
+  el.previewError.hidden = which !== "error";
+  el.resultVideo.hidden = which !== "video";
+  el.previewActions.hidden = which !== "video";
+  el.previewFrame.classList.toggle("has-video", which === "video");
+}
+
+function tickClock() {
+  clearTimeout(state.clockTimer);
+  if (!state.startedAt) return;
+  setText(el.loadingElapsed, formatElapsed(Date.now() - state.startedAt));
+  el.progressFill.style.width = `${Math.max(6, progressPercent())}%`;
+  renderDock();
+  state.clockTimer = window.setTimeout(tickClock, 1000);
+}
+
+function setBusyPreview(phase, detail) {
+  state.phase = phase;
+  showPreview("loading");
+  setText(el.loadingPhase, { submitting: "SUBMITTING", queued: "IN THE QUEUE", rendering: "RENDERING FRAMES", saving: "SAVING VIDEO" }[phase] || "WORKING");
+  setText(el.loadingDetail, detail);
+  tickClock();
+  renderDock();
+}
+
+function showError(message) {
+  state.phase = "failed";
+  state.errorText = message;
+  clearTimeout(state.clockTimer);
+  showPreview("error");
+  setText(el.errorMessage, message);
+  renderDock();
+}
+
+/* --------------------------------------------------------------- generation */
 
 async function requestJson(url, body) {
   const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...accessHeaders() }, body: JSON.stringify(body) });
@@ -602,185 +840,139 @@ async function requestJson(url, body) {
   return { response, data };
 }
 
-function showQuote() {
-  elements.reviewRatio.textContent = state.ratio === "9:16" ? "Vertical" : state.ratio === "16:9" ? "Wide" : "Square";
-  elements.reviewDuration.textContent = state.duration.replace("s", " seconds");
-  const inputKind = selectedInputKind();
-  elements.reviewSource.textContent = inputKind === "video" ? "Your video" : inputKind === "transition" ? "Two images" : inputKind === "reference" ? "Your reference image" : state.mediaToken ? "Your photo" : "Your description";
-  elements.reviewModel.textContent = selectedProfile().name;
-  elements.quotePrice.textContent = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(state.quote);
-  showReview(elements.reviewQuote);
-}
-
-async function getQuote(event) {
-  event?.preventDefault();
-  setText(elements.formError, "");
-  if (!requireAccess()) return;
-  applyModelOptions();
-  if (!elements.prompt.value.trim()) {
-    setText(elements.formError, "Describe the video first.");
-    elements.prompt.focus();
-    return;
-  }
-  if (state.file && !state.mediaToken) {
-    setText(elements.formError, "Wait for the photo to finish preparing, or remove it and try again.");
-    return;
-  }
-  elements.quoteButton.disabled = true;
-  elements.quoteButton.textContent = "Checking price";
+async function getQuote() {
+  state.phase = "quoting";
+  renderDock();
   try {
-    const { response, data } = await requestJson("/api/video/quote", getSettings());
+    const { response, data } = await requestJson("/api/video/quote", requestSettings());
     if (!response.ok) throw new Error(data.error || "Could not get a price right now.");
     if (typeof data.quote !== "number") throw new Error("Venice did not return a price. Try again in a moment.");
     state.quote = data.quote;
     state.quoteSignature = quoteSignature();
-    showQuote();
+    state.phase = "quoted";
+    renderDock();
   } catch (error) {
-    setText(elements.formError, error instanceof Error ? error.message : "Could not get a price right now.");
-  } finally {
-    elements.quoteButton.disabled = false;
-    elements.quoteButton.textContent = "Check price";
+    state.phase = "idle";
+    showToast(error instanceof Error ? error.message : "Could not get a price right now.");
+    renderDock();
   }
-}
-
-function queuePayload() {
-  return { ...getSettings(), mediaToken: state.mediaToken, endMediaToken: state.endMediaToken };
-}
-
-function persistActiveJob() {
-  safeStorage(() => localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(state.job)));
-}
-
-function clearActiveJob() {
-  safeStorage(() => localStorage.removeItem(ACTIVE_JOB_KEY));
-}
-
-const processingPhaseIndex = { submitted: 0, queued: 1, rendering: 2, saving: 3 };
-const processingPhaseLabel = { submitted: "Request sent", queued: "Waiting in Venice's queue", rendering: "Venice is rendering", saving: "Saving your video" };
-const processingPhaseActivity = { submitted: "Connecting to Venice…", queued: "Checking for an available Venice worker…", rendering: "Rendering frames and sound…", saving: "Downloading the finished MP4…" };
-
-function formatElapsed(milliseconds) {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function updateProcessingClock() {
-  if (!state.processingStartedAt) return;
-  elements.processingElapsed.textContent = `Elapsed ${formatElapsed(Date.now() - state.processingStartedAt)}`;
-  clearTimeout(state.processingTimer);
-  if (!elements.reviewProcessing.hidden) state.processingTimer = window.setTimeout(updateProcessingClock, 1_000);
-}
-
-function startProcessingClock(startedAt) {
-  const parsed = Number(startedAt);
-  if (Number.isFinite(parsed) && parsed > 0) state.processingStartedAt = parsed;
-  else if (!state.processingStartedAt) state.processingStartedAt = Date.now();
-  updateProcessingClock();
-}
-
-function stopProcessingClock() {
-  clearTimeout(state.processingTimer);
-  state.processingTimer = null;
-}
-
-function updateProcessingSteps(phase, activity) {
-  const current = processingPhaseIndex[phase] ?? 0;
-  state.processingPhase = phase;
-  elements.processingStatus.textContent = processingPhaseLabel[phase] || processingPhaseLabel.submitted;
-  elements.processingActivity.textContent = activity || processingPhaseActivity[phase] || processingPhaseActivity.submitted;
-  elements.processingSteps.forEach((step, index) => {
-    step.classList.toggle("is-complete", index < current);
-    step.classList.toggle("is-current", index === current);
-    step.toggleAttribute("aria-current", index === current);
-  });
-}
-
-function setProcessing(message, detail, phase = state.processingPhase, startedAt, activity) {
-  showReview(elements.reviewProcessing);
-  elements.processingTitle.textContent = message;
-  elements.processingDetail.textContent = detail;
-  updateProcessingSteps(phase, activity);
-  startProcessingClock(startedAt);
 }
 
 async function queueVideo() {
-  if (!state.quote || state.quoteSignature !== quoteSignature()) return getQuote();
-  elements.queueButton.disabled = true;
-  elements.queueButton.textContent = "Starting video";
-  setProcessing("Sending your idea to Venice.", "We are asking Venice to accept the generation. Nothing else is needed from you.", "submitted", Date.now());
+  state.startedAt = Date.now();
+  state.jobStatus = null;
+  state.statusFailureCount = 0;
+  setBusyPreview("submitting", "Asking Venice to accept this generation.");
   try {
-    const { response, data } = await requestJson("/api/video/queue", queuePayload());
+    const payload = { ...requestSettings(), mediaToken: state.mediaToken, endMediaToken: state.endMediaToken, referenceMediaTokens: state.referenceMediaTokens };
+    const { response, data } = await requestJson("/api/video/queue", payload);
     if (!response.ok) throw new Error(data.error || "Could not start this video.");
-    state.job = { queueId: data.queueId, accessToken: data.accessToken, startedAt: data.createdAt || Date.now() };
-    persistActiveJob();
+    state.job = { queueId: data.queueId, accessToken: data.accessToken, startedAt: data.createdAt || Date.now(), prompt: el.prompt.value.trim(), model: currentModel()?.name || "Venice", ratio: state.ratio, duration: state.duration };
+    state.startedAt = state.job.startedAt;
+    safeStorage(() => localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(state.job)));
     if (navigator.storage?.persist) navigator.storage.persist().catch(() => undefined);
-    setProcessing("Your clip is now with Venice.", "The server will keep watching even if you leave this screen or switch apps.", "queued", state.job.startedAt);
+    state.quote = null;
+    state.quoteSignature = null;
+    setBusyPreview("queued", "Venice accepted the job. The server keeps watching even if you close this screen.");
     pollJob();
   } catch (error) {
-    stopProcessingClock();
-    showQuote();
-    setText(elements.formError, error instanceof Error ? error.message : "Could not start this video.");
-  } finally {
-    elements.queueButton.disabled = false;
-    elements.queueButton.textContent = "Create video";
+    showError(error instanceof Error ? error.message : "Could not start this video.");
   }
 }
 
-function averageTimeText(averageExecutionTime, executionDuration) {
-  const messages = [];
-  if (executionDuration) messages.push(`Venice has been rendering for ${formatElapsed(executionDuration)}.`);
-  if (averageExecutionTime) {
-    const minutes = Math.max(1, Math.round(averageExecutionTime / 60_000));
-    messages.push(`Venice estimates about ${minutes} minute${minutes === 1 ? "" : "s"}.`);
-  }
-  return messages.length ? messages.join(" ") : "Waiting for Venice to publish an estimate.";
+function onGenerate() {
+  if (["quoting", "submitting", "queued", "rendering", "saving"].includes(state.phase)) return;
+  if (!requireAccess()) return;
+  const ready = readiness();
+  if (!ready.ok) { showToast(ready.message); return; }
+  if (state.quote !== null && state.quoteSignature === quoteSignature()) return queueVideo();
+  return getQuote();
 }
 
 async function pollJob() {
   clearTimeout(state.pollTimer);
   if (!state.job) return;
+  const { queueId, accessToken } = state.job;
   try {
-    const { queueId, accessToken } = state.job;
     const response = await fetch(`/api/video/jobs/${encodeURIComponent(queueId)}?token=${encodeURIComponent(accessToken)}`, { cache: "no-store" });
     const job = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const error = new Error(job.error || `Status check returned ${response.status}.`);
-      error.status = response.status;
-      throw error;
-    }
+    if (!response.ok) throw new Error(job.error || `Status check returned ${response.status}.`);
     state.statusFailureCount = 0;
-    state.lastConfirmedStatusAt = Date.now();
-    if (job.status === "COMPLETED" && job.ready) {
-      await showCompletedVideo();
-      return;
-    }
+    state.jobStatus = job;
+    if (job.createdAt) state.startedAt = job.createdAt;
+
+    if (job.status === "COMPLETED" && job.ready) return await deliverVideo();
     if (job.status === "FAILED") {
-      clearActiveJob();
-      setProcessing("This video could not be completed.", job.error || "Your idea is still here. You can change it and try again.", state.processingPhase, job.createdAt || state.job.startedAt);
-      stopProcessingClock();
+      safeStorage(() => localStorage.removeItem(ACTIVE_JOB_KEY));
       state.job = null;
+      showError(job.error || "Venice could not complete this video. Try again or choose another model.");
       return;
     }
-    if (job.createdAt && !state.job.startedAt) {
-      state.job.startedAt = job.createdAt;
-      persistActiveJob();
-    }
-    const phase = job.status === "QUEUED" ? "queued" : "rendering";
-    const title = job.status === "QUEUED" ? "Your clip is in Venice's queue." : "Venice is rendering your video.";
-    const detail = job.status === "QUEUED" ? "A Venice worker will begin when one is available. The server keeps checking while you are away." : "Venice is making frames and any sound the selected model supports. The server will download the MP4 when it is ready.";
-    setProcessing(title, detail, phase, job.createdAt || state.job.startedAt);
-    elements.processingTime.textContent = averageTimeText(job.averageExecutionTime, job.executionDuration);
+    setBusyPreview(job.status === "QUEUED" ? "queued" : "rendering", job.status === "QUEUED"
+      ? "A Venice worker will pick this up shortly."
+      : "Venice is making frames and any sound this model supports.");
     state.pollTimer = window.setTimeout(pollJob, document.hidden ? 12_000 : 5_000);
   } catch (error) {
     state.statusFailureCount += 1;
-    const phase = state.processingPhase === "saving" ? "saving" : state.processingPhase === "rendering" ? "rendering" : "queued";
-    const retrying = state.statusFailureCount === 1 ? "Reconnecting to live status." : "Still reconnecting to live status.";
-    setProcessing(retrying, "Venice can keep working while this phone reconnects. We will retry automatically, and your server-side job remains in place.", phase, state.job.startedAt, "Retrying the status check…");
-    elements.processingTime.textContent = state.lastConfirmedStatusAt ? "Last status update received. Checking again in a moment." : "The first status update is taking a little longer than usual. Checking again now.";
+    setBusyPreview(state.phase === "saving" ? "saving" : state.phase === "rendering" ? "rendering" : "queued", "Reconnecting to live status. Venice keeps working while this device reconnects.");
     state.pollTimer = window.setTimeout(pollJob, 12_000);
   }
 }
+
+async function deliverVideo() {
+  const { queueId, accessToken } = state.job;
+  setBusyPreview("saving", "Downloading the finished MP4 to this device.");
+  try {
+    const response = await fetch(`/api/video/jobs/${encodeURIComponent(queueId)}/file?token=${encodeURIComponent(accessToken)}`);
+    if (!response.ok) throw new Error("The video is ready, but it could not be downloaded yet.");
+    const blob = await response.blob();
+    const entry = {
+      id: queueId,
+      prompt: state.job.prompt || el.prompt.value.trim(),
+      model: state.job.model || "Venice",
+      ratio: state.job.ratio || state.ratio,
+      duration: state.job.duration || state.duration,
+      createdAt: Date.now()
+    };
+    const saved = await saveVideoOnDevice(queueId, blob);
+    if (saved) addHistory(entry);
+    state.finishedIn = state.startedAt ? Date.now() - state.startedAt : null;
+    safeStorage(() => localStorage.removeItem(ACTIVE_JOB_KEY));
+    state.job = null;
+    setResult(blob, `roam-${queueId}.mp4`);
+    showToast(saved ? "Video ready and saved on this device." : "Video ready. Download it now — this browser could not keep a copy.");
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "The video is ready, but it could not be downloaded yet.");
+  }
+}
+
+function setResult(blob, name) {
+  clearTimeout(state.clockTimer);
+  if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
+  state.resultUrl = URL.createObjectURL(blob);
+  el.resultVideo.src = state.resultUrl;
+  el.downloadVideo.href = state.resultUrl;
+  el.downloadVideo.download = name;
+  state.phase = "done";
+  showPreview("video");
+  renderDock();
+  if (window.matchMedia("(max-width: 999px)").matches) el.previewFrame.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function resetForAnother() {
+  clearTimeout(state.clockTimer);
+  if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
+  state.resultUrl = null;
+  el.resultVideo.removeAttribute("src");
+  el.downloadVideo.removeAttribute("href");
+  state.phase = "idle";
+  state.finishedIn = null;
+  showPreview("empty");
+  renderDock();
+  el.prompt.focus({ preventScroll: true });
+}
+
+/* -------------------------------------------------------------- device store */
 
 function openVideoDatabase() {
   return new Promise((resolve, reject) => {
@@ -823,119 +1015,217 @@ async function readVideoOnDevice(id) {
   }
 }
 
-function setResult(blob, name) {
-  stopProcessingClock();
-  if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
-  state.resultUrl = URL.createObjectURL(blob);
-  elements.resultVideo.src = state.resultUrl;
-  elements.downloadVideo.href = state.resultUrl;
-  elements.downloadVideo.download = name;
-  showReview(elements.reviewComplete);
+async function deleteVideoOnDevice(id) {
+  try {
+    const database = await openVideoDatabase();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction("clips", "readwrite");
+      transaction.objectStore("clips").delete(id);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+  } catch {
+    // A clip that cannot be removed still disappears from the visible history list.
+  }
 }
 
-async function showCompletedVideo() {
-  const { queueId, accessToken } = state.job;
-  setProcessing("Saving your video on this device.", "The finished MP4 is ready. We are downloading it so it remains available on this device.", "saving", state.job.startedAt);
-  const response = await fetch(`/api/video/jobs/${encodeURIComponent(queueId)}/file?token=${encodeURIComponent(accessToken)}`);
-  if (!response.ok) throw new Error("The video is ready, but it could not be downloaded to this device yet.");
-  const blob = await response.blob();
-  const saved = await saveVideoOnDevice(queueId, blob);
-  setResult(blob, `roam-${queueId}.mp4`);
-  clearActiveJob();
-  state.job = null;
-  if (!saved) showToast("Your video is ready. Download it now because this browser could not keep a local copy.");
-  else showToast("Your video is ready and saved on this device.");
+const readHistory = () => safeStorage(() => JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]")) || [];
+const writeHistory = (items) => safeStorage(() => localStorage.setItem(HISTORY_KEY, JSON.stringify(items)));
+
+function addHistory(entry) {
+  const items = [entry, ...readHistory().filter((item) => item.id !== entry.id)];
+  for (const removed of items.slice(HISTORY_LIMIT)) void deleteVideoOnDevice(removed.id);
+  writeHistory(items.slice(0, HISTORY_LIMIT));
+  renderHistory();
+}
+
+function renderHistory() {
+  const items = readHistory();
+  el.historyEmpty.hidden = items.length > 0;
+  el.historyList.replaceChildren();
+  for (const item of items) {
+    const row = document.createElement("li");
+    row.className = "history-item";
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "history-open";
+    open.dataset.id = item.id;
+
+    const thumb = document.createElement("span");
+    thumb.className = "history-thumb";
+    thumb.innerHTML = '<svg class="ico"><use href="#i-play"></use></svg>';
+
+    const meta = document.createElement("span");
+    meta.className = "history-meta";
+    const title = document.createElement("strong");
+    title.textContent = item.prompt || "Untitled clip";
+    const detail = document.createElement("span");
+    const when = new Date(item.createdAt || Date.now());
+    detail.textContent = `${item.model || "Venice"} · ${item.duration || ""} ${item.ratio || ""} · ${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    meta.append(title, detail);
+    open.append(thumb, meta);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-button";
+    remove.dataset.remove = item.id;
+    remove.setAttribute("aria-label", "Delete this clip");
+    remove.innerHTML = '<svg class="ico"><use href="#i-trash"></use></svg>';
+
+    row.append(open, remove);
+    el.historyList.append(row);
+  }
+}
+
+async function openHistoryItem(id) {
+  const blob = await readVideoOnDevice(id);
+  if (!blob) { showToast("That clip is no longer stored on this device."); return; }
+  closeDrawer();
+  setResult(blob, `roam-${id}.mp4`);
+  state.finishedIn = null;
+}
+
+async function removeHistoryItem(id) {
+  writeHistory(readHistory().filter((item) => item.id !== id));
+  await deleteVideoOnDevice(id);
+  renderHistory();
 }
 
 async function restoreLatestVideo() {
-  const id = safeStorage(() => localStorage.getItem(LATEST_VIDEO_KEY));
-  if (!id || state.job) return;
-  const blob = await readVideoOnDevice(id);
-  if (blob) setResult(blob, `roam-${id}.mp4`);
+  const newest = readHistory()[0]?.id || safeStorage(() => localStorage.getItem(LATEST_VIDEO_KEY));
+  if (!newest) return;
+  const blob = await readVideoOnDevice(newest);
+  if (blob) { setResult(blob, `roam-${newest}.mp4`); state.finishedIn = null; renderDock(); }
 }
 
-function resetForAnother() {
-  stopProcessingClock();
-  if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
-  state.resultUrl = null;
-  elements.resultVideo.removeAttribute("src");
-  elements.downloadVideo.removeAttribute("href");
-  showReview(elements.reviewEmpty);
-  elements.prompt.focus({ preventScroll: true });
+/* ------------------------------------------------------------------ drawers */
+
+function openDrawer(drawer) {
+  closeDrawer();
+  state.openDrawer = drawer;
+  drawer.hidden = false;
+  el.scrim.hidden = false;
+  drawer.querySelector("button, input, a")?.focus({ preventScroll: true });
 }
 
-function wireEvents() {
-  elements.useApiKey.addEventListener("click", usePersonalApiKey);
-  elements.unlockShared.addEventListener("click", unlockSharedStudio);
-  elements.clearAccess.addEventListener("click", clearAccess);
-  elements.apiKey.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); usePersonalApiKey(); } });
-  elements.sharedPassword.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); unlockSharedStudio(); } });
-  elements.prompt.addEventListener("input", () => { updatePromptCount(); saveDraft(); invalidateQuote(); });
-  elements.pastePrompt.addEventListener("click", pastePrompt);
-  elements.copyPrompt.addEventListener("click", copyPrompt);
-  elements.pasteMedia.addEventListener("click", async () => {
-    try { await selectMedia(await readClipboardImage()); }
-    catch (error) { showToast(error instanceof Error ? error.message : "Use the normal Paste menu or choose a photo."); }
+function closeDrawer() {
+  if (state.openDrawer) state.openDrawer.hidden = true;
+  state.openDrawer = null;
+  el.scrim.hidden = true;
+}
+
+/* -------------------------------------------------------------------- wiring */
+
+function wire() {
+  for (const tab of el.modeTabs) tab.addEventListener("click", () => setMode(tab.dataset.mode));
+
+  el.prompt.addEventListener("input", onPromptInput);
+  el.prompt.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); onGenerate(); }
   });
-  [elements.photoInput, elements.cameraInput].forEach((input) => input.addEventListener("change", () => selectMedia(input.files?.[0])));
-  elements.endPhotoInput.addEventListener("change", () => selectEndPhoto(elements.endPhotoInput.files?.[0]));
-  elements.removeMedia.addEventListener("click", cleanMedia);
-  elements.uploadArea.addEventListener("dragover", (event) => { event.preventDefault(); elements.uploadArea.classList.add("is-dragging"); });
-  elements.uploadArea.addEventListener("dragleave", () => elements.uploadArea.classList.remove("is-dragging"));
-  elements.uploadArea.addEventListener("drop", (event) => {
+  el.negativePrompt.addEventListener("input", () => { saveDraft(); invalidateQuote(); });
+  el.pastePrompt.addEventListener("click", pastePrompt);
+  el.chipRow.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-preset]");
+    if (!chip) return;
+    const existing = el.prompt.value.trim();
+    el.prompt.value = existing ? `${existing.replace(/[.,\s]+$/, "")}, ${chip.dataset.preset}` : chip.dataset.preset;
+    el.prompt.focus();
+    onPromptInput();
+  });
+
+  el.photoInput.addEventListener("change", () => selectMedia(el.photoInput.files?.[0]));
+  el.cameraInput.addEventListener("change", () => selectMedia(el.cameraInput.files?.[0]));
+  el.extraFile.addEventListener("change", () => selectExtraFiles(el.extraFile.files));
+  el.removeMedia.addEventListener("click", clearMedia);
+  el.pasteMedia.addEventListener("click", async () => {
+    try { await selectMedia(await readClipboardImage()); }
+    catch (error) { showToast(error instanceof Error ? error.message : "Use your device's Paste menu."); }
+  });
+  for (const label of [el.chooseFileLabel, el.cameraLabel]) {
+    label.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
+  }
+  el.dropzone.addEventListener("dragover", (event) => { event.preventDefault(); el.dropzone.classList.add("is-dragging"); });
+  el.dropzone.addEventListener("dragleave", () => el.dropzone.classList.remove("is-dragging"));
+  el.dropzone.addEventListener("drop", (event) => {
     event.preventDefault();
-    elements.uploadArea.classList.remove("is-dragging");
+    el.dropzone.classList.remove("is-dragging");
     selectMedia(event.dataTransfer?.files?.[0]);
   });
   document.addEventListener("paste", (event) => {
+    if (currentInputKind() === "text" || currentInputKind() === "video") return;
     const file = [...(event.clipboardData?.files || [])].find((item) => item.type.startsWith("image/"));
     if (file) { event.preventDefault(); selectMedia(file); }
   });
-  elements.durationSelect.addEventListener("change", () => { state.duration = elements.durationSelect.value; saveDraft(); invalidateQuote(); });
-  elements.ratioSelect.addEventListener("change", () => { state.ratio = elements.ratioSelect.value; saveDraft(); invalidateQuote(); });
-  elements.resolutionSelect.addEventListener("change", () => { state.resolution = elements.resolutionSelect.value; saveDraft(); invalidateQuote(); });
-  elements.upscaleSelect.addEventListener("change", () => { state.upscaleFactor = elements.upscaleSelect.value; saveDraft(); invalidateQuote(); });
-  elements.modelPicker.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-profile]");
-    if (!button || button.disabled) return;
-    state.profile = button.dataset.profile;
-    state.modelId = null;
-    renderAdvancedModels(); applyModelOptions(); renderProfiles(); saveDraft(); invalidateQuote();
+
+  el.modelSelect.addEventListener("change", () => {
+    state.modelByMode[state.mode] = el.modelSelect.value;
+    syncOptions();
+    saveDraft();
+    invalidateQuote();
   });
-  elements.advancedModel.addEventListener("change", () => {
-    state.modelId = elements.advancedModel.value || null;
-    applyModelOptions(); renderProfiles(); renderAdvancedModels(); saveDraft(); invalidateQuote();
+  el.ratioSelect.addEventListener("change", () => { state.ratio = el.ratioSelect.value; applyPreviewRatio(state.ratio); saveDraft(); invalidateQuote(); });
+  el.durationSelect.addEventListener("change", () => { state.duration = el.durationSelect.value; saveDraft(); invalidateQuote(); });
+  el.resolutionSelect.addEventListener("change", () => { state.resolution = el.resolutionSelect.value; saveDraft(); invalidateQuote(); });
+  el.upscaleSelect.addEventListener("change", () => { state.upscaleFactor = el.upscaleSelect.value; saveDraft(); invalidateQuote(); });
+  el.audio.addEventListener("change", () => { state.audio = el.audio.checked; saveDraft(); invalidateQuote(); });
+
+  el.generateButton.addEventListener("click", onGenerate);
+  el.retryButton.addEventListener("click", () => { state.phase = "idle"; showPreview("empty"); onGenerate(); });
+  el.makeAnother.addEventListener("click", resetForAnother);
+
+  el.historyButton.addEventListener("click", () => { renderHistory(); openDrawer(el.historyDrawer); });
+  el.closeHistory.addEventListener("click", closeDrawer);
+  el.settingsButton.addEventListener("click", () => openDrawer(el.settingsDrawer));
+  el.closeSettings.addEventListener("click", closeDrawer);
+  el.scrim.addEventListener("click", closeDrawer);
+  el.historyList.addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-remove]");
+    if (remove) return void removeHistoryItem(remove.dataset.remove);
+    const open = event.target.closest("[data-id]");
+    if (open) void openHistoryItem(open.dataset.id);
   });
-  $("#audio").addEventListener("change", (event) => { state.audio = event.target.checked; saveDraft(); invalidateQuote(); });
-  elements.form.addEventListener("submit", getQuote);
-  elements.queueButton.addEventListener("click", () => queueVideo());
-  elements.helpButton.addEventListener("click", () => {
-    const open = elements.helpPanel.hidden;
-    elements.helpPanel.hidden = !open;
-    elements.helpButton.setAttribute("aria-expanded", String(open));
+
+  el.useApiKey.addEventListener("click", usePersonalApiKey);
+  el.unlockShared.addEventListener("click", unlockSharedStudio);
+  el.clearAccess.addEventListener("click", clearAccess);
+  el.apiKey.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); usePersonalApiKey(); } });
+  el.sharedPassword.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); unlockSharedStudio(); } });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.openDrawer) { event.preventDefault(); closeDrawer(); }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && document.activeElement !== el.prompt) { event.preventDefault(); onGenerate(); }
   });
-  elements.closeHelp.addEventListener("click", () => { elements.helpPanel.hidden = true; elements.helpButton.setAttribute("aria-expanded", "false"); });
-  elements.makeAnother.addEventListener("click", resetForAnother);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.job) pollJob(); });
   window.addEventListener("online", () => { if (state.job) pollJob(); });
 }
 
+/* --------------------------------------------------------------------- start */
+
 async function initialize() {
   restoreDraft();
-  applyModelOptions();
-  renderProfiles();
-  renderAdvancedModels();
-  wireEvents();
+  wire();
+  renderModels();
+  updatePromptCount();
+  autoGrowPrompt();
+  renderHistory();
+  showPreview("empty");
   await restoreAccess();
-  void loadProfiles();
-  const rememberedJob = safeStorage(() => JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || "null"));
-  if (rememberedJob?.queueId && rememberedJob?.accessToken) {
-    state.job = rememberedJob;
-    setProcessing("Picking up your video.", "We found an active generation on this device and are checking Venice now.", "queued", state.job.startedAt);
+  void loadCatalog();
+
+  const remembered = safeStorage(() => JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || "null"));
+  if (remembered?.queueId && remembered?.accessToken) {
+    state.job = remembered;
+    state.startedAt = remembered.startedAt || Date.now();
+    setBusyPreview("queued", "Picking up the generation that was already running.");
     pollJob();
   } else {
-    restoreLatestVideo();
+    void restoreLatestVideo();
   }
+  renderDock();
+  if (!hasAccess()) openDrawer(el.settingsDrawer);
 }
 
 initialize();

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#030704">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="Which Venice video model to pick, and what each one is good at.">
+    <title>ROAM · MODEL GUIDE</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23071009'/%3E%3Cpath d='M6 8l3.5 4L6 16M12.5 16H18' stroke='%2383FF4F' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+      <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M5 7l4 5-4 5M12 17h7"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    </svg>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-glyph"><svg class="ico"><use href="#i-terminal"></use></svg></span>
+          <span class="brand-name">ROAM</span>
+          <span class="crumb"><span aria-hidden="true">&gt;</span> MODEL GUIDE</span>
+        </div>
+        <div class="topbar-actions">
+          <a class="ghost-button" href="/"><svg class="ico"><use href="#i-x"></use></svg><span>CLOSE</span></a>
+        </div>
+      </header>
+
+      <main class="doc">
+        <div>
+          <h1>Pick a model in ten seconds.</h1>
+          <p class="lede">Every model here is a real Venice video model. The console only shows you the settings the model you picked actually accepts, so nothing you choose can be rejected for being unsupported.</p>
+        </div>
+
+        <section>
+          <h2>HOW IT WORKS</h2>
+          <ol class="doc-steps">
+            <li>Pick your starting point: <b>image → video</b>, <b>text → video</b>, or <b>video → video</b>.</li>
+            <li>Describe the shot: subject, action, camera move, light.</li>
+            <li>Choose model, shape, length and quality. Defaults are already sensible.</li>
+            <li>Press <b>GENERATE</b> to see the exact Venice price, then press again to confirm.</li>
+            <li>Leave the screen if you want. The server keeps the job running and the clip lands in <b>HISTORY</b>.</li>
+          </ol>
+        </section>
+
+        <section>
+          <h2>THE THREE MODES</h2>
+          <div class="model-cards">
+            <article class="model-card">
+              <h3>IMAGE → VIDEO</h3>
+              <p>The default, and the one most people want. You supply one photo and the model animates it. You keep control of the person, product, or place because the first frame is yours.</p>
+              <p class="mini-note">Best when the look matters more than the story.</p>
+            </article>
+            <article class="model-card">
+              <h3>TEXT → VIDEO</h3>
+              <p>No photo. The model invents everything from your description. Great for ideas, moods, and scenes you cannot photograph.</p>
+              <p class="mini-note">Write camera direction and lighting, not just the subject.</p>
+            </article>
+            <article class="model-card">
+              <h3>VIDEO → VIDEO</h3>
+              <p>Start from a clip you already have. Restyle it, apply motion from it, or upscale it to a sharper resolution.</p>
+              <p class="mini-note">Upscale models use an ENHANCE factor instead of a quality setting.</p>
+            </article>
+          </div>
+        </section>
+
+        <section>
+          <h2>WHICH MODEL FOR WHICH JOB</h2>
+          <div class="model-cards">
+            <article class="model-card">
+              <h3>LTX 2.3 Fast</h3>
+              <p>The quick draft. Cheapest and fastest way to see whether an idea reads at all. Explicit control over shape and resolution.</p>
+              <div class="badges"><span class="badge badge-accent">FAST</span><span class="badge">TEXT</span><span class="badge">IMAGE</span></div>
+            </article>
+            <article class="model-card">
+              <h3>HappyHorse 1.1</h3>
+              <p>Bodies in motion. Choose it for people, animals, dance, sport, and anything where limbs and weight need to look believable.</p>
+              <div class="badges"><span class="badge badge-accent">MOVEMENT</span><span class="badge">TEXT</span><span class="badge">IMAGE</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Seedance 2.0</h3>
+              <p>Cinematic direction. It responds to specific camera moves, lens language, and lighting notes, and can generate its own sound.</p>
+              <div class="badges"><span class="badge badge-accent">CINEMATIC</span><span class="badge">SOUND</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Kling O3</h3>
+              <p>Polished production quality with reliable camera work. A safe pick when the clip has to look finished rather than experimental.</p>
+              <div class="badges"><span class="badge badge-accent">POLISHED</span><span class="badge">TEXT</span><span class="badge">IMAGE</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Grok Imagine (Private)</h3>
+              <p>Mood, emotion, and atmosphere. Runs as a private generation on Venice. The 1.5 variant is image-only and wants a strong opening frame.</p>
+              <div class="badges"><span class="badge badge-warn">PRIVATE</span><span class="badge">MOOD</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Wan 2.7</h3>
+              <p>Venice's uncensored option. Be explicit and detailed — it follows direction literally. Still subject to the law and to Venice's terms.</p>
+              <div class="badges"><span class="badge badge-warn">UNCENSORED</span><span class="badge">TEXT</span><span class="badge">IMAGE</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Wan 2.1 Pro / Ovi</h3>
+              <p>Private photo animation. Point them at one strong frame when the subject must not drift.</p>
+              <div class="badges"><span class="badge badge-warn">PRIVATE</span><span class="badge">IMAGE ONLY</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Veo / Sora</h3>
+              <p>High-fidelity short scenes. Sora is strong on image-led composition and longer clips; Veo produces polished short-form with generated sound.</p>
+              <div class="badges"><span class="badge badge-accent">FIDELITY</span><span class="badge">SOUND</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Pixverse / Vidu</h3>
+              <p>Fast social clips. Stylised motion, flexible formats, quick turnaround — good for volume rather than for a hero shot.</p>
+              <div class="badges"><span class="badge">SOCIAL</span><span class="badge">FAST</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Runway / Gemini</h3>
+              <p>Image-led creative iteration and quick modern scenes with a compact set of formats.</p>
+              <div class="badges"><span class="badge">ITERATION</span></div>
+            </article>
+            <article class="model-card">
+              <h3>LongCat</h3>
+              <p>When duration is the point. Longer private clips where a five-second cut would not be enough.</p>
+              <div class="badges"><span class="badge badge-warn">PRIVATE</span><span class="badge">LONGER</span></div>
+            </article>
+            <article class="model-card">
+              <h3>Transition · Reference · Upscale</h3>
+              <p>Transition models blend a first and last image. Reference models keep a character or product consistent across the shot. Upscale models sharpen a video you already have.</p>
+              <div class="badges"><span class="badge">SPECIALIST</span></div>
+            </article>
+          </div>
+        </section>
+
+        <section>
+          <h2>AVAILABLE TO YOU RIGHT NOW</h2>
+          <p id="live-note">Connect a Venice key or unlock the shared studio on the console to list the models your account can currently use.</p>
+          <div class="model-cards" id="live-models"></div>
+        </section>
+
+        <section>
+          <h2>WRITING A BETTER PROMPT</h2>
+          <ul class="tip-list">
+            <li>Name one subject and one action. Two competing actions usually produce neither.</li>
+            <li>Say what the camera does: slow push in, locked off, handheld follow, wide orbit.</li>
+            <li>Say what the light does: low sun, overcast, single hard key, neon spill.</li>
+            <li>Use the ADVANCED negative prompt for what you keep getting and do not want.</li>
+            <li>Change one thing per retry, so you can tell what actually improved.</li>
+            <li>With a starting image, describe the motion — not the things already visible in the frame.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>PRIVACY AND COST</h2>
+          <p>Models marked <b>private</b> run on Venice's private path. Everything else is anonymised. You are shown the exact Venice price before a job is ever submitted, and nothing is charged until you confirm it. Your API key stays on the server; the browser never receives it.</p>
+        </section>
+
+        <a class="chip chip-accent doc-back" href="/">‹ BACK TO THE CONSOLE</a>
+      </main>
+    </div>
+    <script type="module" src="/about.js"></script>
+  </body>
+</html>
