@@ -344,6 +344,8 @@ ul { margin: 0; padding: 0; list-style: none; }
 .chip .ico { width: 13px; height: 13px; color: var(--accent); }
 .chip:hover { border-color: var(--border-accent); background: rgba(131, 255, 79, .06); }
 .chip-accent { color: var(--accent); border-color: rgba(131, 255, 79, .4); background: var(--accent-soft); }
+.chip.is-danger { color: var(--danger); background: rgba(255, 107, 107, .1); border-color: rgba(255, 107, 107, .45); }
+.chip.is-danger .ico { color: var(--danger); }
 .icon-button {
   display: grid;
   place-items: center;
