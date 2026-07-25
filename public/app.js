@@ -62,6 +62,7 @@ const elements = {
   quotePrice: $("#quote-price"),
   processingTitle: $("#processing-title"),
   processingDetail: $("#processing-detail"),
+  processingActivity: $("#processing-activity-text"),
   processingStatus: $("#processing-status"),
   processingElapsed: $("#processing-elapsed"),
   processingTime: $("#processing-time"),
@@ -111,7 +112,9 @@ const state = {
   pollTimer: null,
   processingTimer: null,
   processingStartedAt: null,
-  processingPhase: "submitted"
+  processingPhase: "submitted",
+  statusFailureCount: 0,
+  lastConfirmedStatusAt: null
 };
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -654,6 +657,7 @@ function clearActiveJob() {
 
 const processingPhaseIndex = { submitted: 0, queued: 1, rendering: 2, saving: 3 };
 const processingPhaseLabel = { submitted: "Request sent", queued: "Waiting in Venice's queue", rendering: "Venice is rendering", saving: "Saving your video" };
+const processingPhaseActivity = { submitted: "Connecting to Venice…", queued: "Checking for an available Venice worker…", rendering: "Rendering frames and sound…", saving: "Downloading the finished MP4…" };
 
 function formatElapsed(milliseconds) {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -680,10 +684,11 @@ function stopProcessingClock() {
   state.processingTimer = null;
 }
 
-function updateProcessingSteps(phase) {
+function updateProcessingSteps(phase, activity) {
   const current = processingPhaseIndex[phase] ?? 0;
   state.processingPhase = phase;
   elements.processingStatus.textContent = processingPhaseLabel[phase] || processingPhaseLabel.submitted;
+  elements.processingActivity.textContent = activity || processingPhaseActivity[phase] || processingPhaseActivity.submitted;
   elements.processingSteps.forEach((step, index) => {
     step.classList.toggle("is-complete", index < current);
     step.classList.toggle("is-current", index === current);
@@ -691,11 +696,11 @@ function updateProcessingSteps(phase) {
   });
 }
 
-function setProcessing(message, detail, phase = state.processingPhase, startedAt) {
+function setProcessing(message, detail, phase = state.processingPhase, startedAt, activity) {
   showReview(elements.reviewProcessing);
   elements.processingTitle.textContent = message;
   elements.processingDetail.textContent = detail;
-  updateProcessingSteps(phase);
+  updateProcessingSteps(phase, activity);
   startProcessingClock(startedAt);
 }
 
@@ -739,7 +744,13 @@ async function pollJob() {
     const { queueId, accessToken } = state.job;
     const response = await fetch(`/api/video/jobs/${encodeURIComponent(queueId)}?token=${encodeURIComponent(accessToken)}`, { cache: "no-store" });
     const job = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(job.error || "Could not check this video.");
+    if (!response.ok) {
+      const error = new Error(job.error || `Status check returned ${response.status}.`);
+      error.status = response.status;
+      throw error;
+    }
+    state.statusFailureCount = 0;
+    state.lastConfirmedStatusAt = Date.now();
     if (job.status === "COMPLETED" && job.ready) {
       await showCompletedVideo();
       return;
@@ -762,9 +773,11 @@ async function pollJob() {
     elements.processingTime.textContent = averageTimeText(job.averageExecutionTime, job.executionDuration);
     state.pollTimer = window.setTimeout(pollJob, document.hidden ? 12_000 : 5_000);
   } catch (error) {
+    state.statusFailureCount += 1;
     const phase = state.processingPhase === "saving" ? "saving" : state.processingPhase === "rendering" ? "rendering" : "queued";
-    setProcessing("Your video is still safe in the queue.", "We could not reach the server from this device. We will try again when your connection returns.", phase, state.job.startedAt);
-    elements.processingTime.textContent = error instanceof Error ? error.message : "Waiting to reconnect.";
+    const retrying = state.statusFailureCount === 1 ? "Reconnecting to live status." : "Still reconnecting to live status.";
+    setProcessing(retrying, "Venice can keep working while this phone reconnects. We will retry automatically, and your server-side job remains in place.", phase, state.job.startedAt, "Retrying the status check…");
+    elements.processingTime.textContent = state.lastConfirmedStatusAt ? "Last status update received. Checking again in a moment." : "The first status update is taking a little longer than usual. Checking again now.";
     state.pollTimer = window.setTimeout(pollJob, 12_000);
   }
 }
