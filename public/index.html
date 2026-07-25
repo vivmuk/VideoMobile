@@ -40,70 +40,116 @@
             <span id="draft-status" class="quiet-status" aria-live="polite"></span>
           </div>
 
+          <section class="access-card" id="access-card" aria-labelledby="access-heading">
+            <div class="field-label-row"><h3 id="access-heading">Choose your access</h3><span class="access-state" id="access-state" aria-live="polite">Not connected</span></div>
+            <p>Use your own Venice API key, or unlock the shared studio on this device.</p>
+            <div class="access-options">
+              <div class="access-option">
+                <label for="venice-api-key">Your Venice API key</label>
+                <div class="access-action"><input id="venice-api-key" type="password" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="secondary-button" id="use-api-key" type="button">Use key</button></div>
+                <small>Kept only for this browser session. It is never shown in the app.</small>
+              </div>
+              <div class="access-option">
+                <label for="shared-password">Shared studio password</label>
+                <div class="access-action"><input id="shared-password" type="password" autocomplete="off" placeholder="Aubrey"><button class="secondary-button" id="unlock-shared" type="button">Unlock</button></div>
+                <small>Saved as a secure device cookie for 30 days.</small>
+              </div>
+            </div>
+            <button class="inline-action" id="clear-access" type="button" hidden>Use a different access method</button>
+            <p class="access-error" id="access-error" role="alert"></p>
+          </section>
+
           <div class="field-group">
             <div class="field-label-row">
               <label for="prompt">Describe the moment</label>
               <span class="prompt-tools"><button class="inline-action" id="paste-prompt" type="button">Paste</button><button class="inline-action" id="copy-prompt" type="button">Copy</button></span>
             </div>
-            <textarea id="prompt" name="prompt" rows="5" maxlength="2500" autocomplete="off" autocapitalize="sentences" placeholder="A ceramic mug on a windowsill, steam curling upward as morning light moves across the table."></textarea>
+            <textarea id="prompt" name="prompt" rows="5" maxlength="5000" autocomplete="off" autocapitalize="sentences" placeholder="A ceramic mug on a windowsill, steam curling upward as morning light moves across the table."></textarea>
             <div class="field-foot">
               <p>Try subject, action, camera movement, and setting.</p>
-              <span id="prompt-count" aria-live="polite">0 / 2,500</span>
+              <span id="prompt-count" aria-live="polite">0 / 5,000</span>
             </div>
           </div>
 
           <div class="field-group">
             <div class="field-label-row">
-              <label for="photo-file">Start with a photo <span class="optional">optional</span></label>
+              <label for="photo-file" id="source-label">Start with a photo <span class="optional">optional</span></label>
               <button class="inline-action" id="paste-media" type="button">Paste image</button>
             </div>
-            <input class="visually-hidden" id="photo-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif">
+            <input class="visually-hidden" id="photo-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.webm">
             <input class="visually-hidden" id="camera-file" type="file" accept="image/*" capture="environment">
             <div class="upload-area" id="upload-area">
               <div class="upload-copy" id="upload-empty">
-                <strong>Bring a photo to life</strong>
-                <span>JPG, PNG, WebP, or GIF, up to 25 MB.</span>
+                <strong id="upload-title">Bring a photo to life</strong>
+                <span id="upload-description">JPG, PNG, WebP, or GIF, up to 25 MB.</span>
                 <div class="upload-actions">
-                  <label class="secondary-button" for="photo-file">Choose photo</label>
-                  <label class="text-button" for="camera-file">Use camera</label>
+                  <label class="secondary-button" id="choose-file-label" for="photo-file">Choose photo</label>
+                  <label class="text-button" id="camera-label" for="camera-file">Use camera</label>
                 </div>
               </div>
               <div class="media-preview" id="media-preview" hidden>
                 <img id="preview-image" alt="Selected starting image">
+                <video id="preview-video" controls muted playsinline preload="metadata" hidden></video>
                 <div>
-                  <strong id="media-name"></strong>
+                  <strong id="media-name">Your file</strong>
                   <span id="media-detail"></span>
                 </div>
-                <button class="icon-button" id="remove-media" type="button" aria-label="Remove photo">Remove</button>
+                <button class="icon-button" id="remove-media" type="button" aria-label="Remove file">Remove</button>
               </div>
             </div>
             <p class="field-error" id="media-error" aria-live="polite"></p>
+            <div class="end-media" id="end-media" hidden>
+              <label for="end-photo-file">Ending image for this transition</label>
+              <input id="end-photo-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif">
+              <span id="end-media-status">Choose the last frame.</span>
+            </div>
             <p class="mobile-note">On a phone, you can choose from Photos or Files. Long-press the prompt box to use your normal Paste menu.</p>
           </div>
 
           <fieldset class="field-group model-choice" id="model-choice">
-            <legend>Choose a look</legend>
-            <p class="choice-intro">Pick what matters most. We use the matching Venice model behind the scenes.</p>
+            <legend>Choose a video model</legend>
+            <p class="choice-intro">Pick what matters most. Private, photo-only, and unrestricted options are labelled clearly.</p>
             <div class="model-picker" id="model-picker" aria-label="Video model choice"></div>
             <p class="model-note" id="model-note" aria-live="polite"></p>
+            <details class="advanced-models" id="advanced-models">
+              <summary>Browse all compatible Venice video models</summary>
+              <label for="advanced-model">Choose a model from the live API catalog</label>
+              <select id="advanced-model">
+                <option value="">Use a recommended model above</option>
+              </select>
+              <p id="advanced-model-note">Connect with a Venice key or the shared studio password to load the current catalog.</p>
+            </details>
           </fieldset>
 
           <fieldset class="field-group settings" id="settings">
             <legend>Make it fit</legend>
-            <div class="segmented" aria-label="Video format">
-              <button type="button" data-setting="ratio" data-value="9:16" aria-pressed="true"><span class="format-shape portrait"></span>Vertical</button>
-              <button type="button" data-setting="ratio" data-value="16:9" aria-pressed="false"><span class="format-shape landscape"></span>Wide</button>
-              <button type="button" data-setting="ratio" data-value="1:1" aria-pressed="false"><span class="format-shape square"></span>Square</button>
-            </div>
-            <div class="setting-line">
+            <div class="setting-line" id="duration-setting">
               <div>
                 <strong>Length</strong>
-                <span>Short clips are easier to refine.</span>
+                <span>Only lengths supported by this model appear.</span>
               </div>
-              <div class="button-pair" aria-label="Length">
-                <button type="button" data-setting="duration" data-value="5s" aria-pressed="true">5 sec</button>
-                <button type="button" data-setting="duration" data-value="10s" aria-pressed="false">10 sec</button>
+              <select id="duration-select" aria-label="Length"></select>
+            </div>
+            <div class="setting-line" id="ratio-setting">
+              <div>
+                <strong>Format</strong>
+                <span>Only formats supported by this model appear.</span>
               </div>
+              <select id="ratio-select" aria-label="Video format"></select>
+            </div>
+            <div class="setting-line" id="resolution-setting">
+              <div>
+                <strong>Resolution</strong>
+                <span>Higher detail can change the quoted price.</span>
+              </div>
+              <select id="resolution-select" aria-label="Resolution"></select>
+            </div>
+            <div class="setting-line" id="upscale-setting" hidden>
+              <div>
+                <strong>Enhancement</strong>
+                <span>Choose how much to upscale the source video.</span>
+              </div>
+              <select id="upscale-select" aria-label="Enhancement"></select>
             </div>
             <label class="toggle-line" for="audio">
               <span><strong>Generate sound</strong><small>We will only use it if the selected model supports it.</small></span>

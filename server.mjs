@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
-import { randomUUID } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { extname, join } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 
@@ -15,20 +15,24 @@ const uploads = new Map();
 const jobs = new Map();
 const activeMonitors = new Set();
 let pendingJobWrite = Promise.resolve();
-let videoCatalog = null;
-let videoCatalogExpiresAt = 0;
+const videoCatalogs = new Map();
 
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
-const validDurations = new Set(["5s", "10s"]);
-const validRatios = new Set(["9:16", "16:9", "1:1"]);
-const MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
+const videoTypes = new Set(["video/mp4", "video/quicktime", "video/webm"]);
+const videoExtensions = new Set([".mp4", ".mov", ".webm"]);
+const fallbackDurations = ["5s", "10s"];
+const fallbackRatios = ["9:16", "16:9", "1:1"];
+const fallbackResolutions = ["720p"];
+const MODEL_CATALOG_TTL_MS = 0;
+const SHARED_ACCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const videoProfiles = [
   {
     id: "fast",
     name: "Fast draft",
     provider: "LTX Video 2.3 Fast",
     description: "Quick tests and simple scenes.",
+    privacy: "Anonymized",
     models: { text: "ltx-2-v2-3-fast-text-to-video", image: "ltx-2-v2-3-fast-image-to-video" }
   },
   {
@@ -36,21 +40,56 @@ const videoProfiles = [
     name: "Natural movement",
     provider: "HappyHorse 1.1",
     description: "People, animals, and lively movement.",
+    privacy: "Anonymized",
     models: { text: "happyhorse-1-1-text-to-video", image: "happyhorse-1-1-image-to-video" }
   },
   {
-    id: "cinematic",
-    name: "Cinematic",
+    id: "seedance",
+    name: "Cinematic precision",
+    provider: "Seedance 2.0",
+    description: "Detailed shots, lighting, camera direction, and native audio.",
+    privacy: "Anonymized",
+    models: { text: "seedance-2-0-text-to-video", image: "seedance-2-0-image-to-video" }
+  },
+  {
+    id: "grok-private",
+    name: "Mood and emotion",
+    provider: "Grok Imagine Private",
+    description: "Private, conversational storytelling with human emotion and atmosphere.",
+    privacy: "Private",
+    models: { text: "grok-imagine-text-to-video-private", image: "grok-imagine-image-to-video-private" }
+  },
+  {
+    id: "grok-15-private",
+    name: "Grok Imagine 1.5 Private",
+    provider: "Grok Imagine 1.5 Private",
+    description: "Private photo animation with a strong starting image.",
+    privacy: "Private · Photo required",
+    models: { image: "grok-imagine-1-5-image-to-video-private" }
+  },
+  {
+    id: "kling",
+    name: "Polished production",
     provider: "Kling O3 Standard",
-    description: "Polished camera work and visual detail.",
+    description: "Balanced quality and speed for refined camera work.",
+    privacy: "Anonymized",
     models: { text: "kling-o3-standard-text-to-video", image: "kling-o3-standard-image-to-video" }
   },
   {
-    id: "creative",
-    name: "Creative detail",
-    provider: "Wan 2.7",
-    description: "Expressive scenes led by a detailed prompt.",
+    id: "wan-unrestricted",
+    name: "Uncensored creative",
+    provider: "Wan 2.7 Uncensored",
+    description: "Venice's uncensored option for explicit, detailed creative direction.",
+    privacy: "Anonymized · Uncensored",
     models: { text: "wan-2-7-text-to-video", image: "wan-2-7-image-to-video" }
+  },
+  {
+    id: "wan-private",
+    name: "Private photo motion",
+    provider: "Wan 2.1 Pro",
+    description: "Private image-to-video when you want to animate a supplied frame.",
+    privacy: "Private · Photo required",
+    models: { image: "wan-2-1-pro-image-to-video" }
   }
 ];
 
@@ -87,6 +126,10 @@ async function updateJob(queueId, changes) {
   if (!existing) return;
   jobs.set(queueId, { ...existing, ...changes, updated_at: Date.now() });
   await persistJobs();
+}
+
+async function failJob(queueId, errorMessage) {
+  await updateJob(queueId, { status: "FAILED", error_message: errorMessage, encrypted_personal_key: null });
 }
 
 const getJob = (queueId) => jobs.get(queueId);
@@ -135,37 +178,110 @@ async function readJson(req) {
   }
 }
 
-function apiKey() {
+function serverApiKey() {
   const key = process.env.VENICE_API_KEY;
   if (!key) throw new Error("VENICE_API_KEY is not set on the server.");
   return key;
 }
 
-async function venice(path, body) {
+function accessSecret() {
+  return process.env.ROAM_ACCESS_TOKEN_SECRET || serverApiKey();
+}
+
+function encryptionKey() {
+  return createHash("sha256").update(process.env.ROAM_JOB_ENCRYPTION_KEY || serverApiKey()).digest();
+}
+
+function equalSecrets(left, right) {
+  const leftHash = createHash("sha256").update(left).digest();
+  const rightHash = createHash("sha256").update(right).digest();
+  return timingSafeEqual(leftHash, rightHash);
+}
+
+function cookieValue(req, name) {
+  const prefix = `${name}=`;
+  return String(req.headers.cookie || "").split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix))?.slice(prefix.length) || null;
+}
+
+function createSharedAccessToken() {
+  const expiresAt = Date.now() + SHARED_ACCESS_TTL_MS;
+  const signature = createHmac("sha256", accessSecret()).update(`shared:${expiresAt}`).digest("base64url");
+  return `${expiresAt}.${signature}`;
+}
+
+function hasSharedAccess(req) {
+  const token = cookieValue(req, "roam_shared_access");
+  if (!token) return false;
+  const [expiresAt, signature] = token.split(".");
+  const expires = Number(expiresAt);
+  if (!Number.isSafeInteger(expires) || expires < Date.now() || !signature) return false;
+  const expected = createHmac("sha256", accessSecret()).update(`shared:${expires}`).digest("base64url");
+  return equalSecrets(signature, expected);
+}
+
+function sharedCookie(req, token, maxAge) {
+  const secure = String(req.headers["x-forwarded-proto"] || "").split(",")[0] === "https" ? "; Secure" : "";
+  return `roam_shared_access=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+}
+
+function encryptPersonalKey(value) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return [iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), encrypted.toString("base64url")].join(".");
+}
+
+function decryptPersonalKey(value) {
+  const [iv, tag, encrypted] = String(value || "").split(".");
+  if (!iv || !tag || !encrypted) throw new Error("The saved credentials for this video are incomplete.");
+  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64url"));
+  decipher.setAuthTag(Buffer.from(tag, "base64url"));
+  return Buffer.concat([decipher.update(Buffer.from(encrypted, "base64url")), decipher.final()]).toString("utf8");
+}
+
+function inferenceAccess(req) {
+  const personalKey = String(req.headers["x-venice-api-key"] || "").trim();
+  if (personalKey) {
+    if (personalKey.length > 512) throw new Error("That Venice API key is not valid.");
+    return { apiKey: personalKey, encryptedPersonalKey: encryptPersonalKey(personalKey) };
+  }
+  if (hasSharedAccess(req)) return { apiKey: serverApiKey(), encryptedPersonalKey: null };
+  const error = new Error("Enter your Venice API key or unlock the shared studio first.");
+  error.statusCode = 401;
+  throw error;
+}
+
+function jobApiKey(job) {
+  return job.encrypted_personal_key ? decryptPersonalKey(job.encrypted_personal_key) : serverApiKey();
+}
+
+async function venice(path, body, key) {
   const response = await fetch(`${VENICE_BASE}/${path}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey()}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
   return { response, contentType: response.headers.get("content-type") || "" };
 }
 
-async function veniceGet(path) {
+async function veniceGet(path, key) {
   const response = await fetch(`${VENICE_BASE}/${path}`, {
-    headers: { Authorization: `Bearer ${apiKey()}` }
+    headers: { Authorization: `Bearer ${key}` }
   });
   return response;
 }
 
-async function getVideoCatalog() {
-  if (videoCatalog && Date.now() < videoCatalogExpiresAt) return videoCatalog;
+async function getVideoCatalog(key) {
+  const cacheKey = createHash("sha256").update(key).digest("base64url");
+  const cached = videoCatalogs.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
   try {
-    const response = await veniceGet("models?type=video");
+    const response = await veniceGet("models?type=video", key);
     if (!response.ok) throw new Error("Venice could not load its video models.");
     const body = await response.json();
-    videoCatalog = Array.isArray(body.data) ? body.data.filter((entry) => !entry.model_spec?.offline && !entry.model_spec?.beta && !entry.model_spec?.betaModel) : [];
-    videoCatalogExpiresAt = Date.now() + MODEL_CATALOG_TTL_MS;
-    return videoCatalog;
+    const data = Array.isArray(body.data) ? body.data.filter((entry) => !entry.model_spec?.offline) : [];
+    videoCatalogs.set(cacheKey, { data, expiresAt: Date.now() + MODEL_CATALOG_TTL_MS });
+    return data;
   } catch {
     return [];
   }
@@ -177,6 +293,7 @@ function profileFor(id) {
 
 function modelForProfile(profile, catalog, hasImage) {
   const modelId = profile.models[hasImage ? "image" : "text"];
+  if (!modelId) return null;
   return catalog.find((entry) => entry.id === modelId) || null;
 }
 
@@ -188,46 +305,157 @@ function profileResponse(profile, catalog) {
     name: profile.name,
     provider: text?.model_spec?.name || image?.model_spec?.name || profile.provider,
     description: profile.description,
+    privacy: profile.privacy,
     supportsText: catalog.length === 0 || Boolean(text),
-    supportsPhoto: catalog.length === 0 || Boolean(image)
+    supportsPhoto: catalog.length === 0 || Boolean(image),
+    textOptions: modelOptions(text),
+    photoOptions: modelOptions(image)
   };
 }
 
-function supportedValues(values, allowed) {
-  if (!Array.isArray(values) || values.length === 0) return allowed;
-  return allowed.filter((value) => values.includes(value));
+function supportsSource(model, hasImage) {
+  return modelInputKind(model) === (hasImage ? "image" : "text");
 }
 
-async function jobSettings(input) {
-  if (!validDurations.has(input.duration) || !validRatios.has(input.aspectRatio)) {
-    throw new Error("Choose a supported duration and format.");
+function modelInputKind(model) {
+  const id = model?.id || "";
+  const type = model?.model_spec?.constraints?.model_type;
+  if (type === "video" || id.includes("video-to-video") || id.includes("motion-control") || id.includes("upscale")) return "video";
+  if (id.includes("transition")) return "transition";
+  if (id.includes("reference-to-video")) return "reference";
+  if (type === "image-to-video" || id.includes("image-to-video")) return "image";
+  return "text";
+}
+
+function advancedModelResponse(model) {
+  const spec = model.model_spec || {};
+  return {
+    id: model.id,
+    name: spec.name || model.id,
+    provider: model.id,
+    description: spec.description || "Use Venice's live quote to check this model's current options and price.",
+    privacy: spec.privacy || "Check Venice settings",
+    supportsText: supportsSource(model, false),
+    supportsPhoto: supportsSource(model, true),
+    inputKind: modelInputKind(model),
+    options: modelOptions(model),
+    bestFor: modelBestFor(model),
+    beta: spec.beta === true || spec.betaModel === true
+  };
+}
+
+function simpleVideoModels(catalog) {
+  return catalog.map(advancedModelResponse);
+}
+
+function stringValues(values) {
+  return Array.isArray(values) ? values.filter((value) => typeof value === "string" && value.length > 0) : [];
+}
+
+function modelOptions(model) {
+  if (!model) {
+    return {
+      durations: fallbackDurations,
+      aspectRatios: fallbackRatios,
+      resolutions: fallbackResolutions,
+      aspectRatioConfigurable: true,
+      resolutionConfigurable: true,
+      audioAvailable: true,
+      audioConfigurable: true,
+      promptCharacterLimit: 2_500,
+      upscaleFactors: []
+    };
   }
+  const constraints = model?.model_spec?.constraints || {};
+  const durations = stringValues(constraints.durations);
+  const aspectRatios = stringValues(constraints.aspect_ratios);
+  const resolutions = stringValues(constraints.resolutions);
+  const isUpscale = model.id.includes("upscale") || (resolutions.length > 0 && resolutions.every((value) => /^\d+x$/i.test(value)));
+  return {
+    durations: durations.length ? durations : fallbackDurations,
+    aspectRatios,
+    resolutions: isUpscale ? [] : resolutions,
+    aspectRatioConfigurable: aspectRatios.length > 0,
+    resolutionConfigurable: resolutions.length > 0 && !isUpscale,
+    audioAvailable: constraints.audio === true,
+    audioConfigurable: constraints.audio_configurable === true,
+    promptCharacterLimit: Number.isInteger(constraints.prompt_character_limit) ? constraints.prompt_character_limit : 2_500,
+    upscaleFactors: isUpscale ? resolutions.map((value) => value.replace(/x$/i, "")) : []
+  };
+}
+
+function modelBestFor(model) {
+  const id = model.id.toLowerCase();
+  if (id.includes("upscale")) return "Improving the detail of an existing video.";
+  if (id.includes("motion-control")) return "Applying movement from a source video to a new look.";
+  if (id.includes("video-to-video") || id.includes("aleph")) return "Restyling or editing an existing video.";
+  if (id.includes("transition")) return "Creating a smooth transition between two images.";
+  if (id.includes("reference-to-video")) return "Keeping a character, product, or scene consistent from reference images.";
+  if (id.includes("wan-2-7") || id.includes("uncensored")) return "Venice's uncensored creative direction; be explicit and detailed in the prompt.";
+  if (id.includes("grok-imagine-1-5")) return "Private image-to-video animation with a strong starting frame.";
+  if (id.includes("grok-imagine")) return "Private, mood-led storytelling and expressive atmosphere.";
+  if (id.includes("seedance")) return "Cinematic shots, specific camera moves, lighting, and detailed direction.";
+  if (id.includes("happyhorse")) return "Natural human movement, dance, fitness, and physical action.";
+  if (id.includes("wan-2.6")) return "Flexible image or text animation with audio-aware options.";
+  if (id.includes("wan-2.5")) return "Quick experiments with short, flexible clips.";
+  if (id.includes("veo")) return "Polished short-form scenes with generated sound.";
+  if (id.includes("sora")) return "High-fidelity image-led scenes and longer composed clips.";
+  if (id.includes("kling")) return "Polished camera work, motion, and production-style shots.";
+  if (id.includes("pixverse")) return "Fast social clips, stylized motion, and flexible formats.";
+  if (id.includes("vidu")) return "Fast, format-flexible clips with generated sound.";
+  if (id.includes("gemini")) return "Quick modern scenes with a compact set of formats.";
+  if (id.includes("ovi")) return "Private image-led animation from a single strong frame.";
+  if (id.includes("runway")) return "Image-led creative direction and rapid visual iterations.";
+  if (id.includes("longcat")) return "Longer private clips where duration matters.";
+  if (id.includes("ltx")) return "Fast iterations with explicit control over format and resolution.";
+  return "Trying this model's current video style and capabilities.";
+}
+
+function inputError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+async function jobSettings(input, key) {
   const hasImage = Boolean(input.hasImage);
   const profile = profileFor(input.profile);
-  const catalog = await getVideoCatalog();
-  const selected = modelForProfile(profile, catalog, hasImage);
-  if (catalog.length > 0 && !selected) {
-    throw new Error(`${profile.name} is not available for ${hasImage ? "photo" : "text"} videos right now. Choose another option.`);
+  const catalog = await getVideoCatalog(key);
+  const requestedModelId = typeof input.modelId === "string" ? input.modelId : "";
+  const selected = requestedModelId ? catalog.find((model) => model.id === requestedModelId) || null : modelForProfile(profile, catalog, hasImage);
+  const displayName = selected?.model_spec?.name || profile.name;
+  if (requestedModelId && !selected) {
+    throw inputError("That model is no longer available. Choose another option from the live catalog.");
   }
-  const constraints = selected?.model_spec?.constraints || {};
-  const durations = supportedValues(constraints.durations, [...validDurations]);
-  const aspectRatios = supportedValues(constraints.aspect_ratios, [...validRatios]);
-  if (!durations.includes(input.duration)) {
-    throw new Error(`${profile.name} supports ${durations.join(" or ")} clips in this studio.`);
+  if (!requestedModelId && !profile.models[hasImage ? "image" : "text"]) {
+    throw inputError(`${profile.name} needs ${hasImage ? "a different starting point" : "a photo"}.`);
   }
-  if (!aspectRatios.includes(input.aspectRatio)) {
-    throw new Error(`${profile.name} does not support that format. Try ${aspectRatios[0] || "a different format"}.`);
+  if (!requestedModelId && catalog.length > 0 && !selected) {
+    throw inputError(`${profile.name} is not available for ${hasImage ? "photo" : "text"} videos right now. Choose another option.`);
   }
-  const resolution = Array.isArray(constraints.resolutions) && constraints.resolutions.length > 0
-    ? (constraints.resolutions.includes("720p") ? "720p" : constraints.resolutions[0])
-    : "720p";
+  const options = modelOptions(selected);
+  if (typeof input.duration !== "string" || !options.durations.includes(input.duration)) {
+    throw inputError(`${displayName} supports ${options.durations.join(" or ")} clips in this studio.`);
+  }
+  if (options.aspectRatioConfigurable && (typeof input.aspectRatio !== "string" || !options.aspectRatios.includes(input.aspectRatio))) {
+    throw inputError(`${displayName} does not support that format. Try ${options.aspectRatios[0] || "a different format"}.`);
+  }
+  if (options.resolutionConfigurable && (typeof input.resolution !== "string" || !options.resolutions.includes(input.resolution))) {
+    throw inputError(`${displayName} does not support that resolution. Try ${options.resolutions[0] || "a different resolution"}.`);
+  }
+  if (options.upscaleFactors.length && (!options.upscaleFactors.includes(String(input.upscaleFactor)))) {
+    throw inputError(`${displayName} supports ${options.upscaleFactors.map((factor) => `${factor}×`).join(" or ")} enhancement.`);
+  }
   const settings = {
     model: selected?.id || profile.models[hasImage ? "image" : "text"],
     duration: input.duration
   };
-  if (!selected || Array.isArray(constraints.aspect_ratios)) settings.aspect_ratio = input.aspectRatio;
-  if (!selected || Array.isArray(constraints.resolutions)) settings.resolution = resolution;
-  if (!selected || constraints.audio_configurable === true) settings.audio = Boolean(input.audio);
+  if (options.aspectRatioConfigurable) settings.aspect_ratio = input.aspectRatio;
+  if (options.resolutionConfigurable) settings.resolution = input.resolution;
+  if (options.upscaleFactors.length) settings.upscale_factor = Number(input.upscaleFactor);
+  if (options.audioConfigurable) settings.audio = Boolean(input.audio);
+  Object.defineProperty(settings, "inputKind", { value: selected ? modelInputKind(selected) : hasImage ? "image" : "text", enumerable: false });
+  Object.defineProperty(settings, "promptCharacterLimit", { value: options.promptCharacterLimit, enumerable: false });
   return settings;
 }
 
@@ -235,22 +463,24 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function finalizeAtVenice(job) {
+async function finalizeAtVenice(job, key) {
   try {
-    await venice("video/complete", { model: job.model, queue_id: job.queue_id });
+    await venice("video/complete", { model: job.model, queue_id: job.queue_id }, key);
   } catch {
     // The downloaded file remains available locally if Venice cleanup is delayed.
   }
 }
 
 async function saveCompletedVideo(job, video) {
+  const key = jobApiKey(job);
   const filename = `${job.queue_id}.mp4`;
   const destination = join(VIDEO_DIR, filename);
   const temporary = `${destination}.${randomUUID()}.tmp`;
   await writeFile(temporary, video);
   await rename(temporary, destination);
   await updateJob(job.queue_id, { status: "COMPLETED", video_path: filename, error_message: null });
-  await finalizeAtVenice(job);
+  await finalizeAtVenice(job, key);
+  await updateJob(job.queue_id, { encrypted_personal_key: null });
 }
 
 async function monitorJob(queueId) {
@@ -262,7 +492,7 @@ async function monitorJob(queueId) {
       if (!job || !["QUEUED", "PROCESSING"].includes(job.status)) return;
       let upstream;
       try {
-        upstream = await venice("video/retrieve", { model: job.model, queue_id: job.queue_id });
+        upstream = await venice("video/retrieve", { model: job.model, queue_id: job.queue_id }, jobApiKey(job));
       } catch (error) {
         await wait(10_000);
         continue;
@@ -275,7 +505,7 @@ async function monitorJob(queueId) {
       }
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        await updateJob(job.queue_id, { status: "FAILED", error_message: body.error || "Venice could not complete this video." });
+        await failJob(job.queue_id, body.error || "Venice could not complete this video.");
         return;
       }
       if (contentType.startsWith("video/")) {
@@ -286,7 +516,7 @@ async function monitorJob(queueId) {
       if (body.status === "COMPLETED" && job.download_url) {
         const download = await fetch(job.download_url);
         if (!download.ok) {
-          await updateJob(job.queue_id, { status: "FAILED", error_message: "The video is ready, but its download link could not be opened." });
+          await failJob(job.queue_id, "The video is ready, but its download link could not be opened.");
           return;
         }
         await saveCompletedVideo(job, Buffer.from(await download.arrayBuffer()));
@@ -297,17 +527,39 @@ async function monitorJob(queueId) {
         await wait(5_000);
         continue;
       }
-      await updateJob(job.queue_id, { status: "FAILED", error_message: body.error || "Venice returned an unexpected job status." });
+      await failJob(job.queue_id, body.error || "Venice returned an unexpected job status.");
       return;
     }
   } catch (error) {
-    await updateJob(queueId, { status: "FAILED", error_message: error instanceof Error ? error.message : "The background worker stopped unexpectedly." });
+    await failJob(queueId, error instanceof Error ? error.message : "The background worker stopped unexpectedly.");
   } finally {
     activeMonitors.delete(queueId);
   }
 }
 
+async function handleAccessUnlock(req, res) {
+  const input = await readJson(req);
+  const password = String(input.password || "");
+  const expected = process.env.ROAM_SHARED_PASSWORD || "Aubrey";
+  if (!password || !equalSecrets(password, expected)) {
+    return json(res, 401, { error: "That shared password is not correct." });
+  }
+  const token = createSharedAccessToken();
+  res.setHeader("Set-Cookie", sharedCookie(req, token, Math.floor(SHARED_ACCESS_TTL_MS / 1000)));
+  json(res, 200, { sharedAccess: true });
+}
+
+function handleAccessStatus(req, res) {
+  json(res, 200, { sharedAccess: hasSharedAccess(req) });
+}
+
+function handleAccessLogout(req, res) {
+  res.setHeader("Set-Cookie", sharedCookie(req, "", 0));
+  json(res, 200, { sharedAccess: false });
+}
+
 async function handleMedia(req, res) {
+  inferenceAccess(req);
   const length = Number(req.headers["content-length"] || 0);
   if (length && length > MAX_MEDIA_BYTES + 1_000_000) return json(res, 413, { error: "This file is larger than 25 MB." });
   const request = new Request("http://localhost/api/media", {
@@ -323,36 +575,68 @@ async function handleMedia(req, res) {
   if (file.type === "image/heic" || file.type === "image/heif" || [".heic", ".heif"].includes(extension)) {
     return json(res, 415, { error: "This is a HEIC photo. Export or share it as JPG, PNG, or WebP, then try again." });
   }
-  if (!imageTypes.has(file.type) && !imageExtensions.has(extension)) return json(res, 415, { error: "Use a JPG, PNG, WebP, or GIF photo." });
+  const isImage = imageTypes.has(file.type) || imageExtensions.has(extension);
+  const isVideo = videoTypes.has(file.type) || videoExtensions.has(extension);
+  if (!isImage && !isVideo) return json(res, 415, { error: "Use a JPG, PNG, WebP, GIF, MP4, MOV, or WebM file." });
   if (file.size > MAX_MEDIA_BYTES) return json(res, 413, { error: "This file is larger than 25 MB." });
   const buffer = Buffer.from(await file.arrayBuffer());
   const token = randomUUID();
-  uploads.set(token, { dataUrl: `data:${imageTypes.has(file.type) ? file.type : "image/jpeg"};base64,${buffer.toString("base64")}`, createdAt: Date.now() });
-  json(res, 201, { mediaToken: token });
+  const type = isImage ? (imageTypes.has(file.type) ? file.type : "image/jpeg") : (videoTypes.has(file.type) ? file.type : extension === ".mov" ? "video/quicktime" : "video/mp4");
+  uploads.set(token, { kind: isImage ? "image" : "video", dataUrl: `data:${type};base64,${buffer.toString("base64")}`, createdAt: Date.now() });
+  json(res, 201, { mediaToken: token, kind: isImage ? "image" : "video" });
 }
 
 async function handleQuote(req, res) {
   const input = await readJson(req);
-  const settings = await jobSettings(input);
-  const { response } = await venice("video/quote", settings);
+  const access = inferenceAccess(req);
+  const settings = await jobSettings(input, access.apiKey);
+  const { response } = await venice("video/quote", settings, access.apiKey);
   const body = await response.json().catch(() => ({ error: "Venice could not provide a quote." }));
   json(res, response.status, body);
 }
 
 async function handleQueue(req, res) {
   const input = await readJson(req);
+  const access = inferenceAccess(req);
   const prompt = String(input.prompt || "").trim();
   if (!prompt) return json(res, 400, { error: "Describe the video you want to make." });
-  if (prompt.length > 2_500) return json(res, 400, { error: "Keep the description under 2,500 characters." });
+  if (prompt.length > 5_000) return json(res, 400, { error: "Keep the description under 5,000 characters." });
   const hasImage = Boolean(input.mediaToken);
-  const settings = await jobSettings({ ...input, hasImage });
+  const settings = await jobSettings({ ...input, hasImage }, access.apiKey);
+  if (prompt.length > settings.promptCharacterLimit) return json(res, 400, { error: `${settings.model} accepts descriptions up to ${settings.promptCharacterLimit.toLocaleString()} characters.` });
   const requestBody = { ...settings, prompt };
-  if (hasImage) {
-    const media = uploads.get(input.mediaToken);
-    if (!media) return json(res, 410, { error: "Your photo session expired. Please add it again." });
-    requestBody.image_url = media.dataUrl;
+  const sourceMedia = input.mediaToken ? uploads.get(input.mediaToken) : null;
+  const expiredMessage = "Your file session expired. Add it again, then try once more.";
+  if (settings.inputKind === "text") {
+    if (sourceMedia) return json(res, 400, { error: "This model starts from a description. Remove the file or choose an image-to-video model." });
+  } else if (!sourceMedia) {
+    return json(res, 400, { error: settings.inputKind === "video" ? "Choose a video for this model first." : "Choose a starting image for this model first." });
+  } else if (settings.inputKind === "video") {
+    if (sourceMedia.kind !== "video") return json(res, 400, { error: "This model needs an MP4, MOV, or WebM video." });
+    requestBody.video_url = sourceMedia.dataUrl;
+  } else {
+    if (sourceMedia.kind !== "image") return json(res, 400, { error: "This model needs a JPG, PNG, WebP, or GIF image." });
+    if (settings.inputKind === "transition") {
+      const endMedia = input.endMediaToken ? uploads.get(input.endMediaToken) : null;
+      if (!endMedia) return json(res, 400, { error: "Choose an ending image for this transition." });
+      if (endMedia.kind !== "image") return json(res, 400, { error: "The ending frame needs to be an image." });
+      requestBody.image_url = sourceMedia.dataUrl;
+      requestBody.end_image_url = endMedia.dataUrl;
+    } else if (settings.inputKind === "reference") {
+      const referenceTokens = Array.isArray(input.referenceMediaTokens) ? input.referenceMediaTokens.slice(0, 8) : [];
+      const references = [sourceMedia, ...referenceTokens.map((token) => uploads.get(token))];
+      if (references.some((media) => !media || media.kind !== "image")) return json(res, 410, { error: expiredMessage });
+      if (settings.model.includes("kling") && settings.model.includes("reference-to-video")) {
+        requestBody.elements = [{ frontal_image_url: sourceMedia.dataUrl }];
+        requestBody.prompt = prompt.includes("@Element1") ? prompt : `@Element1, ${prompt}`;
+      } else {
+        requestBody.reference_image_urls = references.map((media) => media.dataUrl);
+      }
+    } else {
+      requestBody.image_url = sourceMedia.dataUrl;
+    }
   }
-  const { response } = await venice("video/queue", requestBody);
+  const { response } = await venice("video/queue", requestBody, access.apiKey);
   const body = await response.json().catch(() => ({ error: "Venice did not return a readable response." }));
   if (response.ok && body.queue_id) {
     const accessToken = randomUUID();
@@ -367,10 +651,13 @@ async function handleQueue(req, res) {
       execution_duration: null,
       video_path: null,
       error_message: null,
+      encrypted_personal_key: access.encryptedPersonalKey,
       created_at: now,
       updated_at: now
     });
-    if (input.mediaToken) uploads.delete(input.mediaToken);
+    for (const token of [input.mediaToken, input.endMediaToken, ...(Array.isArray(input.referenceMediaTokens) ? input.referenceMediaTokens : [])]) {
+      if (typeof token === "string") uploads.delete(token);
+    }
     void monitorJob(body.queue_id);
     return json(res, response.status, { queueId: body.queue_id, accessToken });
   }
@@ -428,16 +715,20 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && await handleJobGet(url, res)) return;
     if (req.method === "GET" && sendStatic(res, url.pathname)) return;
+    if (req.method === "GET" && url.pathname === "/api/access/status") return handleAccessStatus(req, res);
+    if (req.method === "POST" && url.pathname === "/api/access/unlock") return await handleAccessUnlock(req, res);
+    if (req.method === "POST" && url.pathname === "/api/access/logout") return handleAccessLogout(req, res);
     if (req.method === "GET" && url.pathname === "/api/video/models") {
-      const catalog = await getVideoCatalog();
-      return json(res, 200, { profiles: videoProfiles.map((profile) => profileResponse(profile, catalog)), live: catalog.length > 0 });
+      const access = inferenceAccess(req);
+      const catalog = await getVideoCatalog(access.apiKey);
+      return json(res, 200, { profiles: videoProfiles.map((profile) => profileResponse(profile, catalog)), advancedModels: simpleVideoModels(catalog), live: catalog.length > 0 });
     }
     if (req.method === "POST" && url.pathname === "/api/media") return await handleMedia(req, res);
     if (req.method === "POST" && url.pathname === "/api/video/quote") return await handleQuote(req, res);
     if (req.method === "POST" && url.pathname === "/api/video/queue") return await handleQueue(req, res);
     json(res, 404, { error: "Not found." });
   } catch (error) {
-    json(res, 500, { error: error instanceof Error ? error.message : "Unexpected server error." });
+    json(res, Number.isInteger(error?.statusCode) ? error.statusCode : 500, { error: error instanceof Error ? error.message : "Unexpected server error." });
   }
 });
 
