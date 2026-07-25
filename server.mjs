@@ -659,7 +659,7 @@ async function handleQueue(req, res) {
       if (typeof token === "string") uploads.delete(token);
     }
     void monitorJob(body.queue_id);
-    return json(res, response.status, { queueId: body.queue_id, accessToken });
+    return json(res, response.status, { queueId: body.queue_id, accessToken, createdAt: now });
   }
   json(res, response.status, body);
 }
@@ -686,6 +686,8 @@ async function handleJobGet(url, res) {
       status: job.status,
       averageExecutionTime: job.average_execution_time,
       executionDuration: job.execution_duration,
+      createdAt: job.created_at,
+      updatedAt: job.updated_at,
       error: job.error_message,
       ready: job.status === "COMPLETED"
     });

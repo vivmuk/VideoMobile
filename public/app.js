@@ -62,7 +62,10 @@ const elements = {
   quotePrice: $("#quote-price"),
   processingTitle: $("#processing-title"),
   processingDetail: $("#processing-detail"),
+  processingStatus: $("#processing-status"),
+  processingElapsed: $("#processing-elapsed"),
   processingTime: $("#processing-time"),
+  processingSteps: [$("#step-submitted"), $("#step-queued"), $("#step-rendering"), $("#step-saving")],
   resultVideo: $("#result-video"),
   downloadVideo: $("#download-video"),
   makeAnother: $("#make-another"),
@@ -105,7 +108,10 @@ const state = {
   quote: null,
   job: null,
   resultUrl: null,
-  pollTimer: null
+  pollTimer: null,
+  processingTimer: null,
+  processingStartedAt: null,
+  processingPhase: "submitted"
 };
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -646,26 +652,68 @@ function clearActiveJob() {
   safeStorage(() => localStorage.removeItem(ACTIVE_JOB_KEY));
 }
 
-function setProcessing(message, detail) {
+const processingPhaseIndex = { submitted: 0, queued: 1, rendering: 2, saving: 3 };
+const processingPhaseLabel = { submitted: "Request sent", queued: "Waiting in Venice's queue", rendering: "Venice is rendering", saving: "Saving your video" };
+
+function formatElapsed(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function updateProcessingClock() {
+  if (!state.processingStartedAt) return;
+  elements.processingElapsed.textContent = `Elapsed ${formatElapsed(Date.now() - state.processingStartedAt)}`;
+  clearTimeout(state.processingTimer);
+  if (!elements.reviewProcessing.hidden) state.processingTimer = window.setTimeout(updateProcessingClock, 1_000);
+}
+
+function startProcessingClock(startedAt) {
+  const parsed = Number(startedAt);
+  if (Number.isFinite(parsed) && parsed > 0) state.processingStartedAt = parsed;
+  else if (!state.processingStartedAt) state.processingStartedAt = Date.now();
+  updateProcessingClock();
+}
+
+function stopProcessingClock() {
+  clearTimeout(state.processingTimer);
+  state.processingTimer = null;
+}
+
+function updateProcessingSteps(phase) {
+  const current = processingPhaseIndex[phase] ?? 0;
+  state.processingPhase = phase;
+  elements.processingStatus.textContent = processingPhaseLabel[phase] || processingPhaseLabel.submitted;
+  elements.processingSteps.forEach((step, index) => {
+    step.classList.toggle("is-complete", index < current);
+    step.classList.toggle("is-current", index === current);
+    step.toggleAttribute("aria-current", index === current);
+  });
+}
+
+function setProcessing(message, detail, phase = state.processingPhase, startedAt) {
   showReview(elements.reviewProcessing);
   elements.processingTitle.textContent = message;
   elements.processingDetail.textContent = detail;
+  updateProcessingSteps(phase);
+  startProcessingClock(startedAt);
 }
 
 async function queueVideo() {
   if (!state.quote || state.quoteSignature !== quoteSignature()) return getQuote();
   elements.queueButton.disabled = true;
   elements.queueButton.textContent = "Starting video";
-  setProcessing("Sending it to Venice.", "Once it is queued, the server keeps watching even if you leave this screen.");
+  setProcessing("Sending your idea to Venice.", "We are asking Venice to accept the generation. Nothing else is needed from you.", "submitted", Date.now());
   try {
     const { response, data } = await requestJson("/api/video/queue", queuePayload());
     if (!response.ok) throw new Error(data.error || "Could not start this video.");
-    state.job = { queueId: data.queueId, accessToken: data.accessToken };
+    state.job = { queueId: data.queueId, accessToken: data.accessToken, startedAt: data.createdAt || Date.now() };
     persistActiveJob();
     if (navigator.storage?.persist) navigator.storage.persist().catch(() => undefined);
-    setProcessing("Your video is being made.", "You can leave this screen. We will check again as soon as you come back.");
+    setProcessing("Your clip is now with Venice.", "The server will keep watching even if you leave this screen or switch apps.", "queued", state.job.startedAt);
     pollJob();
   } catch (error) {
+    stopProcessingClock();
     showQuote();
     setText(elements.formError, error instanceof Error ? error.message : "Could not start this video.");
   } finally {
@@ -674,10 +722,14 @@ async function queueVideo() {
   }
 }
 
-function averageTimeText(milliseconds) {
-  if (!milliseconds) return "Venice is preparing your clip.";
-  const minutes = Math.max(1, Math.round(milliseconds / 60_000));
-  return `Venice estimates about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+function averageTimeText(averageExecutionTime, executionDuration) {
+  const messages = [];
+  if (executionDuration) messages.push(`Venice has been rendering for ${formatElapsed(executionDuration)}.`);
+  if (averageExecutionTime) {
+    const minutes = Math.max(1, Math.round(averageExecutionTime / 60_000));
+    messages.push(`Venice estimates about ${minutes} minute${minutes === 1 ? "" : "s"}.`);
+  }
+  return messages.length ? messages.join(" ") : "Waiting for Venice to publish an estimate.";
 }
 
 async function pollJob() {
@@ -694,15 +746,24 @@ async function pollJob() {
     }
     if (job.status === "FAILED") {
       clearActiveJob();
-      setProcessing("This video could not be completed.", job.error || "Your idea is still here. You can change it and try again.");
+      setProcessing("This video could not be completed.", job.error || "Your idea is still here. You can change it and try again.", state.processingPhase, job.createdAt || state.job.startedAt);
+      stopProcessingClock();
       state.job = null;
       return;
     }
-    setProcessing(job.status === "QUEUED" ? "Your clip is in line." : "Your video is being made.", "The server is watching the job. You can close this screen and come back.");
-    elements.processingTime.textContent = averageTimeText(job.averageExecutionTime);
+    if (job.createdAt && !state.job.startedAt) {
+      state.job.startedAt = job.createdAt;
+      persistActiveJob();
+    }
+    const phase = job.status === "QUEUED" ? "queued" : "rendering";
+    const title = job.status === "QUEUED" ? "Your clip is in Venice's queue." : "Venice is rendering your video.";
+    const detail = job.status === "QUEUED" ? "A Venice worker will begin when one is available. The server keeps checking while you are away." : "Venice is making frames and any sound the selected model supports. The server will download the MP4 when it is ready.";
+    setProcessing(title, detail, phase, job.createdAt || state.job.startedAt);
+    elements.processingTime.textContent = averageTimeText(job.averageExecutionTime, job.executionDuration);
     state.pollTimer = window.setTimeout(pollJob, document.hidden ? 12_000 : 5_000);
   } catch (error) {
-    setProcessing("Your video is still safe in the queue.", "We could not reach the server from this device. We will try again when your connection returns.");
+    const phase = state.processingPhase === "saving" ? "saving" : state.processingPhase === "rendering" ? "rendering" : "queued";
+    setProcessing("Your video is still safe in the queue.", "We could not reach the server from this device. We will try again when your connection returns.", phase, state.job.startedAt);
     elements.processingTime.textContent = error instanceof Error ? error.message : "Waiting to reconnect.";
     state.pollTimer = window.setTimeout(pollJob, 12_000);
   }
@@ -750,6 +811,7 @@ async function readVideoOnDevice(id) {
 }
 
 function setResult(blob, name) {
+  stopProcessingClock();
   if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
   state.resultUrl = URL.createObjectURL(blob);
   elements.resultVideo.src = state.resultUrl;
@@ -760,7 +822,7 @@ function setResult(blob, name) {
 
 async function showCompletedVideo() {
   const { queueId, accessToken } = state.job;
-  setProcessing("Saving your video on this device.", "This may take a moment on mobile data.");
+  setProcessing("Saving your video on this device.", "The finished MP4 is ready. We are downloading it so it remains available on this device.", "saving", state.job.startedAt);
   const response = await fetch(`/api/video/jobs/${encodeURIComponent(queueId)}/file?token=${encodeURIComponent(accessToken)}`);
   if (!response.ok) throw new Error("The video is ready, but it could not be downloaded to this device yet.");
   const blob = await response.blob();
@@ -780,6 +842,7 @@ async function restoreLatestVideo() {
 }
 
 function resetForAnother() {
+  stopProcessingClock();
   if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
   state.resultUrl = null;
   elements.resultVideo.removeAttribute("src");
@@ -855,7 +918,7 @@ async function initialize() {
   const rememberedJob = safeStorage(() => JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || "null"));
   if (rememberedJob?.queueId && rememberedJob?.accessToken) {
     state.job = rememberedJob;
-    setProcessing("Picking up your video.", "We found an active generation on this device.");
+    setProcessing("Picking up your video.", "We found an active generation on this device and are checking Venice now.", "queued", state.job.startedAt);
     pollJob();
   } else {
     restoreLatestVideo();
