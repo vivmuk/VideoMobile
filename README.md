@@ -10,6 +10,8 @@ vivvideo is a focused, mobile-first Venice video front end, presented as a dark 
 - **Price before generation.** `GENERATE` fetches the exact Venice quote and turns into `CONFIRM · $x.xx`; the job is only submitted on the second press, and any settings change invalidates the price.
 - **Prompt optimizer.** The wand button in the corner of the prompt box rewrites a rough draft into a full shot description — subject, action, setting, camera, light, atmosphere, style, motion detail — through Venice's own text model, adapted to the selected video model, mode, clip length, framing and sound support. Pressing it again restores the creator's own wording, and typing clears the undo buffer. Set `VENICE_PROMPT_MODEL` to pin a specific text model; otherwise the `default` text trait is resolved from Venice and cached.
 - **Advanced, not hidden:** sound, negative prompt, and the full model spec live in a collapsed `ADVANCED` panel. History and access controls open as drawers.
+- **Sound is on by default** and stays that way. Choosing a model that cannot generate audio no longer overwrites the creator's preference for every model chosen afterwards; the toggle reflects what the current model actually supports while remembering what was asked for.
+- **Generating again from the same photo just works.** A queued job consumes its upload on the server, so the console re-uploads the attached file automatically instead of failing the second run.
 - **`/about`** is a plain-language model guide: what each mode is for, which model family suits which job, and how to write a better prompt. It also lists the models the connected account can use right now.
 - Keyboard: `Cmd`/`Ctrl` + `Enter` generates, `Esc` closes drawers, plain `Enter` inserts a newline in the prompt.
 
@@ -40,7 +42,8 @@ The API key is held by the Node server and is never delivered to the browser.
 - A personal Venice key is encrypted in that job record only while it is needed for recovery; it is cleared as soon as the generation reaches a terminal state.
 - A background worker polls Venice, downloads a completed MP4, and stores it under `data/videos/` before the browser has to return.
 - Finished clips are served with byte-range support (`Accept-Ranges`, `206 Partial Content`, `HEAD`), which iOS Safari requires before it will play a video at all, and which lets Android players seek. The preview element tries the streamed URL first and falls back to the stored copy on this device; if neither decodes, it says so plainly and keeps Download and open-in-a-new-tab available rather than showing a broken player.
-- The browser saves the active job token in `localStorage`. Returning to the app resumes the job view automatically.
+- The browser saves the active job token in `localStorage`. Returning to the app resumes the job view automatically. Status checks are guarded against re-entry, because a phone firing `visibilitychange` and `online` while a job finishes would otherwise deliver the same clip twice and lose it.
+- The server logs each accepted queue id, each completion, and every failed Venice call with its status and message, so a generation that does not arrive can be traced from the log.
 - Completed clips are stored in IndexedDB, not `localStorage`, because video files are much larger than browser local-storage quotas. The Download action remains available if device storage is refused or cleared.
 - The last 20 finished clips stay in the `HISTORY` drawer. Opening one replays it from device storage; deleting one removes both the entry and the stored file.
 

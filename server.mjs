@@ -130,6 +130,7 @@ async function updateJob(queueId, changes) {
 }
 
 async function failJob(queueId, errorMessage) {
+  console.warn(`[${new Date().toISOString()}] job ${queueId} failed: ${errorMessage}`);
   await updateJob(queueId, { status: "FAILED", error_message: errorMessage, encrypted_personal_key: null });
 }
 
@@ -538,10 +539,17 @@ async function handlePromptEnhance(req, res) {
     venice_parameters: { include_venice_system_prompt: false, disable_thinking: true, strip_thinking_response: true }
   }, access.apiKey);
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) return json(res, response.status, { error: body.error || "Could not optimize that description right now." });
+  if (!response.ok) {
+    logFailure("prompt/enhance", `${model} -> ${response.status} ${body.error || "no message"}`);
+    return json(res, response.status, { error: body.error || "Could not optimize that description right now." });
+  }
   const optimized = cleanOptimizedPrompt(body?.choices?.[0]?.message?.content, limit);
   if (!optimized) return json(res, 502, { error: "The optimizer did not return a usable description. Try again." });
   json(res, 200, { prompt: optimized });
+}
+
+function logFailure(scope, detail) {
+  console.warn(`[${new Date().toISOString()}] ${scope}: ${detail}`);
 }
 
 function inputError(message) {
@@ -612,6 +620,7 @@ async function saveCompletedVideo(job, video) {
   await writeFile(temporary, video);
   await rename(temporary, destination);
   await updateJob(job.queue_id, { status: "COMPLETED", video_path: filename, error_message: null });
+  console.log(`[${new Date().toISOString()}] job ${job.queue_id} completed (${video.length} bytes)`);
   await finalizeAtVenice(job, key);
   await updateJob(job.queue_id, { encrypted_personal_key: null });
 }
@@ -725,6 +734,7 @@ async function handleQuote(req, res) {
   const settings = await jobSettings(input, access.apiKey);
   const { response } = await venice("video/quote", settings, access.apiKey);
   const body = await response.json().catch(() => ({ error: "Venice could not provide a quote." }));
+  if (!response.ok) logFailure("quote", `${settings.model} -> ${response.status} ${body.error || "no message"}`);
   json(res, response.status, body);
 }
 
@@ -795,8 +805,10 @@ async function handleQueue(req, res) {
       if (typeof token === "string") uploads.delete(token);
     }
     void monitorJob(body.queue_id);
+    console.log(`[${new Date().toISOString()}] queued ${body.queue_id} on ${body.model || settings.model}`);
     return json(res, response.status, { queueId: body.queue_id, accessToken, createdAt: now });
   }
+  logFailure("queue", `${settings.model} -> ${response.status} ${body.error || "no message"}`);
   json(res, response.status, body);
 }
 

@@ -139,6 +139,7 @@ const state = {
   resolution: "720p",
   upscaleFactor: "2",
   audio: true,
+  audioPreference: true,
   personalApiKey: "",
   sharedAccess: false,
   file: null,
@@ -147,11 +148,15 @@ const state = {
   previewUrl: null,
   endMediaToken: null,
   referenceMediaTokens: [],
+  extraFiles: [],
   quote: null,
   quoteSignature: null,
   phase: "idle",
   job: null,
   jobStatus: null,
+  polling: false,
+  delivering: false,
+  uploading: false,
   resultUrl: null,
   playbackSources: [],
   pollTimer: null,
@@ -388,8 +393,10 @@ function syncOptions() {
   if (resolutions.length && !resolutions.includes(state.resolution)) state.resolution = resolutions[0];
   if (upscales.length && !upscales.includes(state.upscaleFactor)) state.upscaleFactor = upscales[0];
 
+  // A model that cannot be configured must not overwrite the creator's choice,
+  // otherwise sound stays off for every model chosen afterwards.
   const audioConfigurable = options.audioConfigurable === true;
-  if (!audioConfigurable) state.audio = options.audioAvailable === true;
+  state.audio = audioConfigurable ? state.audioPreference : options.audioAvailable === true;
 
   fillSelect(el.durationSelect, durations, state.duration, (value) => (value === "Auto" ? "Auto" : value.replace("s", " sec")));
   fillSelect(el.ratioSelect, ratios, state.ratio, (value) => `${value}${value === "9:16" ? " tall" : value === "16:9" ? " wide" : value === "1:1" ? " square" : ""}`);
@@ -501,13 +508,14 @@ function renderExtraFrames(kind) {
   if (!showExtra) {
     state.endMediaToken = null;
     state.referenceMediaTokens = [];
+    state.extraFiles = [];
     el.extraFile.value = "";
     return;
   }
   el.extraFile.multiple = kind === "reference";
   setText(el.extraLabel, kind === "transition" ? "ENDING FRAME" : `EXTRA REFERENCES (OPTIONAL · UP TO ${MAX_REFERENCES})`);
-  if (kind === "transition" && !state.endMediaToken) setText(el.extraStatus, "Choose the last frame of the transition.");
-  if (kind === "reference" && !state.referenceMediaTokens.length) setText(el.extraStatus, "More angles of the same subject improve consistency.");
+  if (kind === "transition" && !state.extraFiles.length) setText(el.extraStatus, "Choose the last frame of the transition.");
+  if (kind === "reference" && !state.extraFiles.length) setText(el.extraStatus, "More angles of the same subject improve consistency.");
 }
 
 /* -------------------------------------------------------------------- media */
@@ -581,6 +589,7 @@ async function selectMedia(file) {
   setText(el.mediaDetail, `Preparing ${mediaSize(file.size)}…`);
   el.dropEmpty.hidden = true;
   el.mediaPreview.hidden = false;
+  state.uploading = true;
   renderDock();
   try {
     const body = await uploadMedia(file);
@@ -592,6 +601,7 @@ async function selectMedia(file) {
     setText(el.mediaError, error instanceof Error ? error.message : "Could not prepare that file.");
     setText(el.mediaDetail, "Choose another file");
   } finally {
+    state.uploading = false;
     invalidateQuote();
     renderDock();
   }
@@ -611,17 +621,20 @@ async function selectExtraFiles(files) {
     if (kind === "transition") {
       const body = await uploadMedia(list[0]);
       state.endMediaToken = body.mediaToken;
+      state.extraFiles = [list[0]];
       setText(el.extraStatus, `${list[0].name || "Ending frame"} is ready.`);
     } else {
       const chosen = list.slice(0, MAX_REFERENCES);
       const uploaded = await Promise.all(chosen.map((file) => uploadMedia(file)));
       state.referenceMediaTokens = uploaded.map((body) => body.mediaToken);
+      state.extraFiles = chosen;
       setText(el.extraStatus, `${uploaded.length} extra reference${uploaded.length === 1 ? "" : "s"} ready.`);
     }
     invalidateQuote();
   } catch (error) {
     state.endMediaToken = null;
     state.referenceMediaTokens = [];
+    state.extraFiles = [];
     setText(el.extraStatus, error instanceof Error ? error.message : "Could not prepare those images.");
   }
 }
@@ -744,7 +757,7 @@ function saveDraft() {
     duration: state.duration,
     resolution: state.resolution,
     upscaleFactor: state.upscaleFactor,
-    audio: state.audio
+    audio: state.audioPreference
   };
   safeStorage(() => localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)));
 }
@@ -760,7 +773,8 @@ function restoreDraft() {
   if (typeof saved.duration === "string") state.duration = saved.duration;
   if (typeof saved.resolution === "string") state.resolution = saved.resolution;
   if (typeof saved.upscaleFactor === "string") state.upscaleFactor = saved.upscaleFactor;
-  state.audio = saved.audio !== false;
+  state.audioPreference = saved.audio !== false;
+  state.audio = state.audioPreference;
   for (const tab of el.modeTabs) tab.setAttribute("aria-selected", String(tab.dataset.mode === state.mode));
 }
 
@@ -799,10 +813,11 @@ function readiness() {
   if (!currentModel()) return { ok: false, message: "No model available for this mode." };
   if (!el.prompt.value.trim()) return { ok: false, message: "Describe the video to begin." };
   const kind = currentInputKind();
-  if (kind !== "text" && !state.mediaToken) {
-    return { ok: false, message: state.file ? "Preparing your file…" : kind === "video" ? "Add the source video." : "Add the starting image." };
+  if (kind !== "text" && !state.file) {
+    return { ok: false, message: kind === "video" ? "Add the source video." : "Add the starting image." };
   }
-  if (kind === "transition" && !state.endMediaToken) return { ok: false, message: "Add the ending frame." };
+  if (state.uploading) return { ok: false, message: "Preparing your file…" };
+  if (kind === "transition" && !state.extraFiles.length) return { ok: false, message: "Add the ending frame." };
   return { ok: true, message: "Ready to generate" };
 }
 
@@ -933,18 +948,37 @@ async function getQuote() {
   }
 }
 
+// The server drops an upload once a job accepts it, so a second generation from
+// the same photo has to send it again.
+async function ensureUploads() {
+  const kind = currentInputKind();
+  if (kind === "text") return;
+  if (state.file && !state.mediaToken) state.mediaToken = (await uploadMedia(state.file)).mediaToken;
+  if (kind === "transition" && state.extraFiles[0] && !state.endMediaToken) {
+    state.endMediaToken = (await uploadMedia(state.extraFiles[0])).mediaToken;
+  }
+  if (kind === "reference" && state.extraFiles.length && !state.referenceMediaTokens.length) {
+    const uploaded = await Promise.all(state.extraFiles.map((file) => uploadMedia(file)));
+    state.referenceMediaTokens = uploaded.map((body) => body.mediaToken);
+  }
+}
+
 async function queueVideo() {
   state.startedAt = Date.now();
   state.jobStatus = null;
   state.statusFailureCount = 0;
   setBusyPreview("submitting", "Asking Venice to accept this generation.");
   try {
+    await ensureUploads();
     const payload = { ...requestSettings(), mediaToken: state.mediaToken, endMediaToken: state.endMediaToken, referenceMediaTokens: state.referenceMediaTokens };
     const { response, data } = await requestJson("/api/video/queue", payload);
     if (!response.ok) throw new Error(data.error || "Could not start this video.");
     state.job = { queueId: data.queueId, accessToken: data.accessToken, startedAt: data.createdAt || Date.now(), prompt: el.prompt.value.trim(), model: currentModel()?.name || "Venice", ratio: state.ratio, duration: state.duration };
     state.startedAt = state.job.startedAt;
     safeStorage(() => localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(state.job)));
+    state.mediaToken = null;
+    state.endMediaToken = null;
+    state.referenceMediaTokens = [];
     if (navigator.storage?.persist) navigator.storage.persist().catch(() => undefined);
     state.quote = null;
     state.quoteSignature = null;
@@ -957,6 +991,11 @@ async function queueVideo() {
 
 function onGenerate() {
   if (["quoting", "submitting", "queued", "rendering", "saving"].includes(state.phase)) return;
+  // A job that is still tracked only needs picking back up, not paying for again.
+  if (state.job) {
+    setBusyPreview("queued", "Checking this generation again.");
+    return void pollJob();
+  }
   if (!requireAccess()) return;
   const ready = readiness();
   if (!ready.ok) { showToast(ready.message); return; }
@@ -965,8 +1004,11 @@ function onGenerate() {
 }
 
 async function pollJob() {
+  // visibilitychange, online and the scheduled timer can all fire at once on a
+  // phone. Without this guard two checks race to deliver the same finished job.
+  if (!state.job || state.polling || state.delivering) return;
   clearTimeout(state.pollTimer);
-  if (!state.job) return;
+  state.polling = true;
   const { queueId, accessToken } = state.job;
   try {
     const response = await fetch(`/api/video/jobs/${encodeURIComponent(queueId)}?token=${encodeURIComponent(accessToken)}`, { cache: "no-store" });
@@ -991,10 +1033,14 @@ async function pollJob() {
     state.statusFailureCount += 1;
     setBusyPreview(state.phase === "saving" ? "saving" : state.phase === "rendering" ? "rendering" : "queued", "Reconnecting to live status. Venice keeps working while this device reconnects.");
     state.pollTimer = window.setTimeout(pollJob, 12_000);
+  } finally {
+    state.polling = false;
   }
 }
 
 async function deliverVideo() {
+  if (state.delivering || !state.job) return;
+  state.delivering = true;
   const { queueId, accessToken } = state.job;
   const fileUrl = `/api/video/jobs/${encodeURIComponent(queueId)}/file?token=${encodeURIComponent(accessToken)}`;
   setBusyPreview("saving", "Downloading the finished MP4 to this device.");
@@ -1019,6 +1065,8 @@ async function deliverVideo() {
     showToast(saved ? "Video ready and saved on this device." : "Video ready. Download it now — this browser could not keep a copy.");
   } catch (error) {
     showError(error instanceof Error ? error.message : "The video is ready, but it could not be downloaded yet.");
+  } finally {
+    state.delivering = false;
   }
 }
 
@@ -1278,10 +1326,13 @@ function wire() {
   el.durationSelect.addEventListener("change", () => { state.duration = el.durationSelect.value; saveDraft(); invalidateQuote(); });
   el.resolutionSelect.addEventListener("change", () => { state.resolution = el.resolutionSelect.value; saveDraft(); invalidateQuote(); });
   el.upscaleSelect.addEventListener("change", () => { state.upscaleFactor = el.upscaleSelect.value; saveDraft(); invalidateQuote(); });
-  el.audio.addEventListener("change", () => { state.audio = el.audio.checked; saveDraft(); invalidateQuote(); });
+  el.audio.addEventListener("change", () => { state.audioPreference = el.audio.checked; state.audio = el.audio.checked; saveDraft(); invalidateQuote(); });
 
   el.generateButton.addEventListener("click", onGenerate);
-  el.retryButton.addEventListener("click", () => { state.phase = "idle"; showPreview("empty"); onGenerate(); });
+  el.retryButton.addEventListener("click", () => {
+    if (!state.job) { state.phase = "idle"; showPreview("empty"); }
+    onGenerate();
+  });
   el.makeAnother.addEventListener("click", resetForAnother);
   el.resultVideo.addEventListener("error", onVideoError);
 
