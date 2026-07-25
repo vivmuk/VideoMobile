@@ -37,7 +37,7 @@
         <form id="video-form" novalidate>
           <div class="form-heading">
             <h2>Your video</h2>
-            <span id="draft-status" class="quiet-status" aria-live="polite"></span>
+            <div class="form-heading-actions"><span id="draft-status" class="quiet-status" aria-live="polite"></span><button class="access-summary" id="clear-access" type="button" hidden>Access connected</button></div>
           </div>
 
           <section class="access-card" id="access-card" aria-labelledby="access-heading">
@@ -51,11 +51,10 @@
               </div>
               <div class="access-option">
                 <label for="shared-password">Shared studio password</label>
-                <div class="access-action"><input id="shared-password" type="password" autocomplete="off" placeholder="Aubrey"><button class="secondary-button" id="unlock-shared" type="button">Unlock</button></div>
+                <div class="access-action"><input id="shared-password" type="password" autocomplete="off" placeholder="Enter password"><button class="secondary-button" id="unlock-shared" type="button">Unlock</button></div>
                 <small>Saved as a secure device cookie for 30 days.</small>
               </div>
             </div>
-            <button class="inline-action" id="clear-access" type="button" hidden>Use a different access method</button>
             <p class="access-error" id="access-error" role="alert"></p>
           </section>
 

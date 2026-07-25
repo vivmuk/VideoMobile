@@ -143,8 +143,10 @@ function updateAccessPresentation() {
   const usingPersonalKey = Boolean(state.personalApiKey);
   const message = usingPersonalKey ? "Using your Venice key for this session" : state.sharedAccess ? "Shared studio unlocked on this device" : "Not connected";
   setText(elements.accessState, message);
-  elements.clearAccess.hidden = !hasAccess();
-  elements.accessCard.classList.toggle("is-connected", hasAccess());
+  const connected = hasAccess();
+  elements.accessCard.hidden = connected;
+  elements.clearAccess.hidden = !connected;
+  elements.clearAccess.textContent = usingPersonalKey ? "Key connected · change" : "Studio unlocked · change";
 }
 
 function requireAccess() {
