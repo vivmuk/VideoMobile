@@ -35,6 +35,7 @@ const el = {
   extraFile: $("#extra-file"),
   extraStatus: $("#extra-status"),
   frameTray: $("#frame-tray"),
+  framingNote: $("#framing-note"),
 
   modelSelect: $("#model-select"),
   ratioControl: $("#ratio-control"),
@@ -152,6 +153,9 @@ const state = {
   referenceMediaTokens: [],
   extraFiles: [],
   extraPreviews: [],
+  sourceAspect: null,
+  ratioTouched: false,
+  previewRatioLocked: false,
   quote: null,
   quoteSignature: null,
   phase: "idle",
@@ -192,11 +196,82 @@ function formatElapsed(milliseconds) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function applyPreviewRatio(ratio) {
-  const [width, height] = String(ratio || "9:16").split(":").map(Number);
+function setPreviewFrame(width, height) {
   const valid = width > 0 && height > 0;
   el.previewFrame.style.setProperty("--preview-ratio", valid ? `${width} / ${height}` : "9 / 16");
   el.previewFrame.style.setProperty("--preview-ar", String(valid ? width / height : 0.5625));
+}
+
+function applyPreviewRatio(ratio) {
+  // A loaded video's own dimensions win: the model does not always return the
+  // shape that was requested, and the frame must not crop whatever arrives.
+  if (state.previewRatioLocked) return;
+  const [width, height] = String(ratio || "9:16").split(":").map(Number);
+  setPreviewFrame(width, height);
+}
+
+function onVideoMetadata() {
+  const { videoWidth, videoHeight } = el.resultVideo;
+  if (!videoWidth || !videoHeight) return;
+  state.previewRatioLocked = true;
+  setPreviewFrame(videoWidth, videoHeight);
+}
+
+function unlockPreviewRatio() {
+  state.previewRatioLocked = false;
+  applyPreviewRatio(currentOptions().aspectRatios?.length ? state.ratio : "16:9");
+}
+
+const parseRatio = (value) => {
+  const [width, height] = String(value || "").split(":").map(Number);
+  return width > 0 && height > 0 ? width / height : null;
+};
+
+function closestRatio(aspect, ratios) {
+  let best = null;
+  let bestGap = Infinity;
+  for (const candidate of ratios) {
+    const value = parseRatio(candidate);
+    if (!value) continue;
+    const gap = Math.abs(Math.log(value / aspect));
+    if (gap < bestGap) { bestGap = gap; best = candidate; }
+  }
+  return best;
+}
+
+// Warn before generating when the requested frame cannot hold the whole photo,
+// because that is the crop the model will perform.
+function renderFramingNote() {
+  const options = currentOptions();
+  const ratios = options.aspectRatios || [];
+  const kind = currentInputKind();
+  if (!state.sourceAspect || kind === "text" || kind === "video") {
+    el.framingNote.hidden = true;
+    return;
+  }
+  if (!ratios.length) {
+    el.framingNote.hidden = false;
+    setText(el.framingNote, "This model picks its own frame shape, so it may crop your photo. Choose a model with a SHAPE control to keep all of it.");
+    return;
+  }
+  const target = parseRatio(state.ratio);
+  if (!target) { el.framingNote.hidden = true; return; }
+  const gap = Math.abs(Math.log(target / state.sourceAspect));
+  const better = closestRatio(state.sourceAspect, ratios);
+  if (better && better !== state.ratio) {
+    const orientation = state.sourceAspect < target ? "taller" : "wider";
+    el.framingNote.hidden = false;
+    setText(el.framingNote, `Your photo is ${orientation} than the ${state.ratio} frame, so the model will crop it. ${better} keeps more of it.`);
+    return;
+  }
+  // Already on the closest frame this model offers, so only mention a trim
+  // that will actually be visible.
+  if (gap >= 0.15) {
+    el.framingNote.hidden = false;
+    setText(el.framingNote, `${state.ratio} is the closest frame this model offers, so the edges of your photo will be trimmed a little.`);
+    return;
+  }
+  el.framingNote.hidden = true;
 }
 
 /* ------------------------------------------------------------------- access */
@@ -409,11 +484,17 @@ function syncOptions() {
   state.audio = audioConfigurable ? state.audioPreference : options.audioAvailable === true;
 
   fillSelect(el.durationSelect, durations, state.duration, (value) => (value === "Auto" ? "Auto" : value.replace("s", " sec")));
-  fillSelect(el.ratioSelect, ratios, state.ratio, (value) => `${value}${value === "9:16" ? " tall" : value === "16:9" ? " wide" : value === "1:1" ? " square" : ""}`);
+  const ratioChoosable = options.aspectRatioConfigurable && ratios.length > 0;
+  if (ratioChoosable) {
+    fillSelect(el.ratioSelect, ratios, state.ratio, (value) => `${value}${value === "9:16" ? " tall" : value === "16:9" ? " wide" : value === "1:1" ? " square" : ""}`);
+  } else {
+    fillSelect(el.ratioSelect, ["model"], "model", () => "Model decides");
+  }
+  el.ratioSelect.disabled = !ratioChoosable;
   fillSelect(el.resolutionSelect, resolutions, state.resolution, (value) => value);
   fillSelect(el.upscaleSelect, upscales, state.upscaleFactor, (value) => `${value}× sharper`);
 
-  el.ratioControl.hidden = !(options.aspectRatioConfigurable && ratios.length);
+  el.ratioControl.classList.toggle("is-locked", !ratioChoosable);
   el.resolutionControl.hidden = !(options.resolutionConfigurable && resolutions.length);
   el.upscaleControl.hidden = !upscales.length;
   el.durationControl.hidden = durations.length <= 1 && durations[0] === "Auto" && upscales.length > 0;
@@ -428,6 +509,7 @@ function syncOptions() {
   updatePromptCount();
 
   applyPreviewRatio(ratios.length ? state.ratio : "16:9");
+  renderFramingNote();
 
   if (model) {
     const requirement = {
@@ -609,6 +691,7 @@ function clearMedia() {
   state.mediaKind = null;
   state.mediaToken = null;
   state.previewUrl = null;
+  state.sourceAspect = null;
   el.previewImage.removeAttribute("src");
   el.previewVideo.removeAttribute("src");
   el.previewImage.hidden = true;
@@ -668,6 +751,7 @@ async function selectMedia(file) {
   el.previewVideo.hidden = kind !== "video";
   if (kind === "image") el.previewImage.src = state.previewUrl;
   else el.previewVideo.src = state.previewUrl;
+  void measureSource(file, kind);
   setText(el.mediaName, file.name || "File from clipboard");
   setText(el.mediaDetail, `Preparing ${mediaSize(file.size)}…`);
   el.dropEmpty.hidden = true;
@@ -687,6 +771,41 @@ async function selectMedia(file) {
     state.uploading = false;
     invalidateQuote();
     renderDock();
+  }
+}
+
+// Knowing the source's shape lets the console request a frame that fits it.
+async function measureSource(file, kind) {
+  state.sourceAspect = null;
+  try {
+    const aspect = await new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const node = kind === "video" ? document.createElement("video") : new Image();
+      const done = (value) => { URL.revokeObjectURL(url); resolve(value); };
+      node.onerror = () => { URL.revokeObjectURL(url); reject(new Error("unreadable")); };
+      if (kind === "video") {
+        node.preload = "metadata";
+        node.onloadedmetadata = () => done(node.videoWidth / node.videoHeight);
+      } else {
+        node.onload = () => done(node.naturalWidth / node.naturalHeight);
+      }
+      node.src = url;
+    });
+    if (!Number.isFinite(aspect) || aspect <= 0) return;
+    state.sourceAspect = aspect;
+    const options = currentOptions();
+    const ratios = options.aspectRatios || [];
+    if (!state.ratioTouched && options.aspectRatioConfigurable && ratios.length) {
+      const match = closestRatio(aspect, ratios);
+      if (match && match !== state.ratio) {
+        state.ratio = match;
+        saveDraft();
+        invalidateQuote();
+      }
+    }
+    syncOptions();
+  } catch {
+    renderFramingNote();
   }
 }
 
@@ -993,6 +1112,7 @@ function tickClock() {
 }
 
 function setBusyPreview(phase, detail) {
+  if (phase === "submitting") unlockPreviewRatio();
   state.phase = phase;
   showPreview("loading");
   setText(el.loadingPhase, { submitting: "SUBMITTING", queued: "IN THE QUEUE", rendering: "RENDERING FRAMES", saving: "SAVING VIDEO" }[phase] || "WORKING");
@@ -1209,6 +1329,7 @@ function resetForAnother() {
   state.playbackSources = [];
   state.phase = "idle";
   state.finishedIn = null;
+  unlockPreviewRatio();
   showPreview("empty");
   renderDock();
   el.prompt.focus({ preventScroll: true });
@@ -1414,7 +1535,14 @@ function wire() {
     saveDraft();
     invalidateQuote();
   });
-  el.ratioSelect.addEventListener("change", () => { state.ratio = el.ratioSelect.value; applyPreviewRatio(state.ratio); saveDraft(); invalidateQuote(); });
+  el.ratioSelect.addEventListener("change", () => {
+    state.ratio = el.ratioSelect.value;
+    state.ratioTouched = true;
+    unlockPreviewRatio();
+    renderFramingNote();
+    saveDraft();
+    invalidateQuote();
+  });
   el.durationSelect.addEventListener("change", () => { state.duration = el.durationSelect.value; saveDraft(); invalidateQuote(); });
   el.resolutionSelect.addEventListener("change", () => { state.resolution = el.resolutionSelect.value; saveDraft(); invalidateQuote(); });
   el.upscaleSelect.addEventListener("change", () => { state.upscaleFactor = el.upscaleSelect.value; saveDraft(); invalidateQuote(); });
@@ -1427,6 +1555,7 @@ function wire() {
   });
   el.makeAnother.addEventListener("click", resetForAnother);
   el.resultVideo.addEventListener("error", onVideoError);
+  el.resultVideo.addEventListener("loadedmetadata", onVideoMetadata);
 
   el.historyButton.addEventListener("click", () => { renderHistory(); openDrawer(el.historyDrawer); });
   el.closeHistory.addEventListener("click", closeDrawer);
