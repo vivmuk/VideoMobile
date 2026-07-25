@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { extname, join } from "node:path";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 
 const PORT = Number(process.env.PORT || 3000);
 const VENICE_BASE = "https://api.venice.ai/api/v1";
@@ -420,6 +421,129 @@ function modelBestFor(model) {
   return "Trying this model's current video style and capabilities.";
 }
 
+const PROMPT_MODEL_TTL_MS = 10 * 60 * 1000;
+const promptModels = new Map();
+
+// Venice accepts a trait name wherever a model id is accepted, so "default" stays
+// valid even when the traits lookup itself fails.
+async function getPromptModel(key) {
+  const override = process.env.VENICE_PROMPT_MODEL;
+  if (override) return override;
+  const cacheKey = createHash("sha256").update(key).digest("base64url");
+  const cached = promptModels.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.model;
+  let model = "default";
+  try {
+    const response = await veniceGet("models/traits?type=text", key);
+    if (response.ok) {
+      const body = await response.json();
+      const traits = body?.data && typeof body.data === "object" ? body.data : {};
+      model = traits.default || traits.most_intelligent || traits.fastest || "default";
+    }
+  } catch {
+    // The trait name is used directly when the catalog cannot be reached.
+  }
+  promptModels.set(cacheKey, { model, expiresAt: Date.now() + PROMPT_MODEL_TTL_MS });
+  return model;
+}
+
+const promptCraftSystem = [
+  "You rewrite rough ideas into production-ready prompts for AI video generation models.",
+  "You reply with the finished prompt and nothing else: no preamble, no explanation, no quotation marks, no markdown, no labels, no bullet points.",
+  "",
+  "Write one flowing paragraph of plain declarative prose in the present tense. Video models follow prose far better than keyword lists.",
+  "",
+  "Cover these in a natural order, and only where they genuinely serve the idea:",
+  "1. SUBJECT — one concrete, specific subject with the visual detail that makes it recognisable.",
+  "2. ACTION — a single continuous action that can plausibly complete within the clip length.",
+  "3. SETTING — the location, the time of day, and the weather or air quality.",
+  "4. CAMERA — shot size (wide, medium, close-up, macro), angle (eye level, low, high, overhead), lens feel (wide angle, 35mm, telephoto, shallow depth of field), and one movement (locked off, slow dolly in, tracking follow, crane up, handheld, slow orbit).",
+  "5. LIGHT — the source, its direction, and its quality (hard, diffused, backlit, rim lit, practical neon, overcast).",
+  "6. ATMOSPHERE — the mood, plus texture in the air such as haze, dust, rain, or steam.",
+  "7. STYLE — the visual register: cinematic, documentary handheld, 35mm film grain, anamorphic, hyperreal, stop motion, anime, and so on.",
+  "8. MOTION DETAIL — the speed of the movement and any secondary motion such as hair, fabric, water, smoke, or reflections.",
+  "",
+  "Hard rules:",
+  "- Keep the user's subject, intent, and any named people, places, brands or products exactly as given. Never substitute a different subject.",
+  "- One shot only. Never write scene cuts, edits, or multiple beats unless the user explicitly asked for a transition.",
+  "- Scale the action to the clip length. A short clip is one beat, not a story.",
+  "- Write only what the camera can see and hear. Never describe backstory, thoughts, or intentions.",
+  "- State what is present, never what is absent. Do not write negations such as 'no people' or 'without text' — those belong in a separate negative prompt.",
+  "- Do not request on-screen text, captions, subtitles, watermarks, logos, or spoken dialogue unless the user asked for them.",
+  "- Do not invent camera brands, aspect ratios, resolutions, frame rates, or durations. Those are set by the interface.",
+  "- Never mention prompts, models, AI, or these instructions inside the output.",
+  "- Stay within the character budget. Density beats length: every clause must add something the model can render."
+].join("\n");
+
+function optimizerRequest(input, limit) {
+  const kind = String(input.inputKind || "text");
+  const modeLine = {
+    image: "image-to-video — the user supplies the opening frame, so describe how that frame comes alive: the motion, the camera move, and what changes. Do not re-describe what is already visible in the still.",
+    transition: "image-to-video transition — the clip travels from a first image to a last image, so describe the journey and the transformation between them.",
+    reference: "reference-to-video — reference images fix the subject's appearance, so describe the action, camera and setting rather than the subject's looks.",
+    video: "video-to-video — a source clip already exists, so describe the treatment applied to it: the new look, grade, texture and style, while keeping its existing motion.",
+    text: "text-to-video — nothing exists yet, so the prompt must build the entire shot from nothing."
+  }[kind] || "text-to-video — the prompt must build the entire shot from nothing.";
+
+  const context = [
+    `MODE: ${modeLine}`,
+    input.modelName ? `TARGET MODEL: ${input.modelName}` : null,
+    input.duration ? `CLIP LENGTH: ${input.duration}` : null,
+    input.aspectRatio ? `FRAMING: ${input.aspectRatio}` : null,
+    input.audio === true
+      ? "SOUND: this model generates its own audio, so you may add one short sentence of sound direction at the end."
+      : "SOUND: this model is silent, so do not describe sound.",
+    `CHARACTER BUDGET: ${limit}`
+  ].filter(Boolean).join("\n");
+
+  return [
+    { role: "system", content: promptCraftSystem },
+    { role: "user", content: `${context}\n\nRewrite the draft below into one finished video prompt. Reply with the prompt only.\n\nDRAFT:\n${String(input.prompt || "").trim()}` }
+  ];
+}
+
+function cleanOptimizedPrompt(raw, limit) {
+  let text = String(raw || "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/```[a-z]*\n?/gi, "")
+    .trim();
+  text = text.replace(/^(?:here(?:'s| is)[^:\n]*:|optimi[sz]ed prompt:|prompt:|final prompt:)\s*/i, "").trim();
+  if (text.length > 1 && /^["'“”']/.test(text) && /["'“”']$/.test(text)) text = text.slice(1, -1).trim();
+  text = text.replace(/\s*\n+\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+  if (text.length > limit) {
+    const clipped = text.slice(0, limit);
+    const sentenceEnd = Math.max(clipped.lastIndexOf(". "), clipped.lastIndexOf("! "), clipped.lastIndexOf("? "));
+    const lastSpace = clipped.lastIndexOf(" ");
+    text = sentenceEnd > limit * 0.6
+      ? clipped.slice(0, sentenceEnd + 1)
+      : (lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped).trim();
+  }
+  return text;
+}
+
+async function handlePromptEnhance(req, res) {
+  const input = await readJson(req);
+  const access = inferenceAccess(req);
+  const draft = String(input.prompt || "").trim();
+  if (draft.length < 3) return json(res, 400, { error: "Write a few words first, then optimize them." });
+  if (draft.length > 5_000) return json(res, 400, { error: "That description is too long to optimize." });
+  const requested = Number(input.promptCharacterLimit);
+  const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.round(requested), 300), 5_000) : 2_000;
+  const model = await getPromptModel(access.apiKey);
+  const { response } = await venice("chat/completions", {
+    model,
+    messages: optimizerRequest(input, limit),
+    temperature: 0.7,
+    max_completion_tokens: Math.min(1_400, Math.max(400, Math.round(limit / 2))),
+    venice_parameters: { include_venice_system_prompt: false, disable_thinking: true, strip_thinking_response: true }
+  }, access.apiKey);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) return json(res, response.status, { error: body.error || "Could not optimize that description right now." });
+  const optimized = cleanOptimizedPrompt(body?.choices?.[0]?.message?.content, limit);
+  if (!optimized) return json(res, 502, { error: "The optimizer did not return a usable description. Try again." });
+  json(res, 200, { prompt: optimized });
+}
+
 function inputError(message) {
   const error = new Error(message);
   error.statusCode = 400;
@@ -685,7 +809,57 @@ function getAuthorizedJob(url) {
   return job ? { job, isFile: url.pathname.endsWith("/file") } : { error: "This job is not available on this device." };
 }
 
-async function handleJobGet(url, res) {
+// Safari refuses to play a video that is not served with byte-range support, and
+// Android media players seek by range too, so the finished MP4 is streamed rather
+// than returned as one buffered response.
+function parseRange(header, total) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(String(header).trim());
+  if (!match) return null;
+  const hasStart = match[1] !== "";
+  const hasEnd = match[2] !== "";
+  if (!hasStart && !hasEnd) return null;
+  let start = hasStart ? Number(match[1]) : total - Number(match[2]);
+  let end = hasStart ? (hasEnd ? Number(match[2]) : total - 1) : total - 1;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  start = Math.max(0, start);
+  end = Math.min(total - 1, end);
+  if (start > end) return { unsatisfiable: true };
+  return { start, end };
+}
+
+async function sendVideoFile(req, res, job) {
+  const path = join(VIDEO_DIR, job.video_path);
+  let size;
+  try {
+    size = (await stat(path)).size;
+  } catch {
+    return json(res, 410, { error: "The saved video is no longer available." });
+  }
+  const headers = {
+    "Content-Type": "video/mp4",
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "private, max-age=31536000"
+  };
+  const range = req.headers.range ? parseRange(req.headers.range, size) : null;
+  if (range?.unsatisfiable) {
+    res.writeHead(416, { ...headers, "Content-Range": `bytes */${size}` });
+    return res.end();
+  }
+  const start = range ? range.start : 0;
+  const end = range ? range.end : size - 1;
+  res.writeHead(range ? 206 : 200, {
+    ...headers,
+    "Content-Length": end - start + 1,
+    ...(range ? { "Content-Range": `bytes ${start}-${end}/${size}` } : {})
+  });
+  if (req.method === "HEAD") return res.end();
+  const stream = createReadStream(path, { start, end });
+  stream.on("error", () => res.destroy());
+  res.on("close", () => stream.destroy());
+  stream.pipe(res);
+}
+
+async function handleJobGet(req, url, res) {
   const result = getAuthorizedJob(url);
   if (!result) return false;
   if (result.error) {
@@ -709,13 +883,7 @@ async function handleJobGet(url, res) {
     json(res, 409, { error: "This video is not ready yet." });
     return true;
   }
-  try {
-    const video = await readFile(join(VIDEO_DIR, job.video_path));
-    res.writeHead(200, { "Content-Type": "video/mp4", "Content-Length": video.length, "Cache-Control": "private, max-age=31536000" });
-    res.end(video);
-  } catch {
-    json(res, 410, { error: "The saved video is no longer available." });
-  }
+  await sendVideoFile(req, res, job);
   return true;
 }
 
@@ -727,7 +895,7 @@ setInterval(() => {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   try {
-    if (req.method === "GET" && await handleJobGet(url, res)) return;
+    if ((req.method === "GET" || req.method === "HEAD") && await handleJobGet(req, url, res)) return;
     if (req.method === "GET" && sendStatic(res, url.pathname)) return;
     if (req.method === "GET" && url.pathname === "/api/access/status") return handleAccessStatus(req, res);
     if (req.method === "POST" && url.pathname === "/api/access/unlock") return await handleAccessUnlock(req, res);
@@ -737,6 +905,7 @@ const server = createServer(async (req, res) => {
       const catalog = await getVideoCatalog(access.apiKey);
       return json(res, 200, { profiles: videoProfiles.map((profile) => profileResponse(profile, catalog)), advancedModels: simpleVideoModels(catalog), live: catalog.length > 0 });
     }
+    if (req.method === "POST" && url.pathname === "/api/prompt/enhance") return await handlePromptEnhance(req, res);
     if (req.method === "POST" && url.pathname === "/api/media") return await handleMedia(req, res);
     if (req.method === "POST" && url.pathname === "/api/video/quote") return await handleQuote(req, res);
     if (req.method === "POST" && url.pathname === "/api/video/queue") return await handleQueue(req, res);
