@@ -1,6 +1,16 @@
-# Roam video studio
+# vivvideo
 
-Roam is a focused, mobile-first Venice video front end. It presents beginner-friendly choices for LTX, HappyHorse, Seedance, Grok Imagine Private, Kling, and Wan. An advanced picker exposes every current Venice video model, including reference, transition, and video-to-video workflows. The server refreshes the Venice catalog before catalog, quote, and queue requests, then only exposes fields that the selected model currently accepts.
+vivvideo is a focused, mobile-first Venice video front end, presented as a dark terminal-style **Command Center**: one prompt console, one row of labelled controls, one preview, one Generate button. The server refreshes the Venice catalog before catalog, quote, and queue requests, then only exposes fields that the selected model currently accepts.
+
+## Command Center interface
+
+- **Three modes, clearly labelled:** `IMAGE → VIDEO` (the default, because it is what most people want), `TEXT → VIDEO`, and `VIDEO → VIDEO`. The mode filters the model list, changes the upload requirements, and renames the source panel.
+- **Every live Venice video model is selectable.** The picker groups the studio's recommended models first, then lists the rest of the account's catalog. Transition, reference, motion-control, and upscale models appear under the mode that matches their input.
+- **Only supported parameters are shown.** Length, shape, quality, upscale factor, sound, and the prompt character limit come from that model's current `model_spec.constraints`, so a setting that a model does not accept is never displayed or sent.
+- **Price before generation.** `GENERATE` fetches the exact Venice quote and turns into `CONFIRM · $x.xx`; the job is only submitted on the second press, and any settings change invalidates the price.
+- **Advanced, not hidden:** sound, negative prompt, and the full model spec live in a collapsed `ADVANCED` panel. History and access controls open as drawers.
+- **`/about`** is a plain-language model guide: what each mode is for, which model family suits which job, and how to write a better prompt. It also lists the models the connected account can use right now.
+- Keyboard: `Cmd`/`Ctrl` + `Enter` generates, `Esc` closes drawers, plain `Enter` inserts a newline in the prompt.
 
 ## Run locally
 
@@ -30,6 +40,7 @@ The API key is held by the Node server and is never delivered to the browser.
 - A background worker polls Venice, downloads a completed MP4, and stores it under `data/videos/` before the browser has to return.
 - The browser saves the active job token in `localStorage`. Returning to the app resumes the job view automatically.
 - Completed clips are stored in IndexedDB, not `localStorage`, because video files are much larger than browser local-storage quotas. The Download action remains available if device storage is refused or cleared.
+- The last 20 finished clips stay in the `HISTORY` drawer. Opening one replays it from device storage; deleting one removes both the entry and the stored file.
 
 For a public deployment, run this server on durable hosting and connect jobs to an authenticated user account. Mobile browsers can suspend or terminate background tabs, so the server worker is the reliable mechanism that keeps a Venice generation moving while a user is away. Clipboard shortcuts require HTTPS in production; the normal long-press Paste menu remains the fallback on iPhone and Android.
 
@@ -48,9 +59,11 @@ No database is required for the first deployment. For durable generation recover
 
 ## Mobile behavior
 
+- The mode tabs, prompt, starting image, all four controls, and the Generate button fit on one phone screen; the preview and advanced settings sit just below. There is never horizontal scrolling.
+- The Generate button and its status line stick to the bottom of the viewport, so the primary action stays reachable while scrolling.
 - Native photo picker and a separate camera action work with the operating system's own Photos, Files, and camera choices.
 - JPG, PNG, WebP, and GIF files up to 25 MB are accepted. HEIC is caught early with a direct recovery path.
 - The description is saved without the image, avoiding large mobile-storage writes.
-- The interface uses 16 px form text to avoid iPhone Safari input zoom, safe-area padding, and `100dvh` where viewport height matters.
-- Every model choice is shown as an outcome first and an actual Venice model second, so a new user can choose without learning vendor terminology.
+- The interface uses 15–16 px form text to avoid iPhone Safari input zoom, safe-area padding, and `100dvh` where viewport height matters.
+- Every model choice shows a plain-language "Good for:" line under the control, so a new user can choose without learning vendor terminology.
 - Grok Imagine 1.5 Private and Wan 2.1 Pro are photo-only options. Wan 2.7 is labelled **Uncensored** to match Venice's model guidance, while still not implying that a user can bypass applicable law or platform rules.

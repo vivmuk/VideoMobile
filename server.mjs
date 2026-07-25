@@ -149,8 +149,10 @@ function json(res, status, body) {
 function sendStatic(res, pathname) {
   const files = {
     "/": ["public/index.html", "text/html; charset=utf-8"],
+    "/about": ["public/about.html", "text/html; charset=utf-8"],
     "/styles.css": ["public/styles.css", "text/css; charset=utf-8"],
-    "/app.js": ["public/app.js", "text/javascript; charset=utf-8"]
+    "/app.js": ["public/app.js", "text/javascript; charset=utf-8"],
+    "/about.js": ["public/about.js", "text/javascript; charset=utf-8"]
   };
   const entry = files[pathname];
   if (!entry) return false;
@@ -327,8 +329,13 @@ function modelInputKind(model) {
   return "text";
 }
 
+function recommendedProfileFor(modelId) {
+  return videoProfiles.find((profile) => Object.values(profile.models).includes(modelId)) || null;
+}
+
 function advancedModelResponse(model) {
   const spec = model.model_spec || {};
+  const recommended = recommendedProfileFor(model.id);
   return {
     id: model.id,
     name: spec.name || model.id,
@@ -340,6 +347,8 @@ function advancedModelResponse(model) {
     inputKind: modelInputKind(model),
     options: modelOptions(model),
     bestFor: modelBestFor(model),
+    recommended: Boolean(recommended),
+    recommendedAs: recommended?.name || null,
     beta: spec.beta === true || spec.betaModel === true
   };
 }
@@ -372,7 +381,7 @@ function modelOptions(model) {
   const resolutions = stringValues(constraints.resolutions);
   const isUpscale = model.id.includes("upscale") || (resolutions.length > 0 && resolutions.every((value) => /^\d+x$/i.test(value)));
   return {
-    durations: durations.length ? durations : fallbackDurations,
+    durations: durations.length ? durations : isUpscale ? ["Auto"] : fallbackDurations,
     aspectRatios,
     resolutions: isUpscale ? [] : resolutions,
     aspectRatioConfigurable: aspectRatios.length > 0,
@@ -605,6 +614,9 @@ async function handleQueue(req, res) {
   const settings = await jobSettings({ ...input, hasImage }, access.apiKey);
   if (prompt.length > settings.promptCharacterLimit) return json(res, 400, { error: `${settings.model} accepts descriptions up to ${settings.promptCharacterLimit.toLocaleString()} characters.` });
   const requestBody = { ...settings, prompt };
+  const negativePrompt = String(input.negativePrompt || "").trim();
+  if (negativePrompt.length > settings.promptCharacterLimit) return json(res, 400, { error: `Keep the negative prompt under ${settings.promptCharacterLimit.toLocaleString()} characters.` });
+  if (negativePrompt) requestBody.negative_prompt = negativePrompt;
   const sourceMedia = input.mediaToken ? uploads.get(input.mediaToken) : null;
   const expiredMessage = "Your file session expired. Add it again, then try once more.";
   if (settings.inputKind === "text") {
@@ -736,5 +748,5 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   for (const job of pendingJobs()) void monitorJob(job.queue_id);
-  console.log(`Roam is ready at http://localhost:${PORT}`);
+  console.log(`vivvideo is ready at http://localhost:${PORT}`);
 });
