@@ -93,6 +93,8 @@ const el = {
   sharedPassword: $("#shared-password"),
   unlockShared: $("#unlock-shared"),
   clearAccess: $("#clear-access"),
+  clearStorage: $("#clear-storage"),
+  storageSummary: $("#storage-summary"),
   toast: $("#toast")
 };
 
@@ -104,6 +106,11 @@ const LATEST_VIDEO_KEY = "roam-latest-video";
 const HISTORY_KEY = "roam-video-history";
 const PERSONAL_KEY_SESSION = "roam-personal-venice-key";
 const HISTORY_LIMIT = 20;
+// A visit after a long gap should start clean rather than resurrecting old work.
+const DRAFT_TTL_MS = 6 * 60 * 60 * 1000;
+const RESULT_TTL_MS = 2 * 60 * 60 * 1000;
+const JOB_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_STATUS_FAILURES = 5;
 
 const MODE_KINDS = { image: ["image", "transition", "reference"], text: ["text"], video: ["video"] };
 const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif";
@@ -174,7 +181,8 @@ const state = {
   statusFailureCount: 0,
   openDrawer: null,
   promptBeforeOptimize: null,
-  optimizing: false
+  optimizing: false,
+  purgeArmed: false
 };
 
 /* ------------------------------------------------------------------ helpers */
@@ -964,7 +972,8 @@ function saveDraft() {
     duration: state.duration,
     resolution: state.resolution,
     upscaleFactor: state.upscaleFactor,
-    audio: state.audioPreference
+    audio: state.audioPreference,
+    savedAt: Date.now()
   };
   safeStorage(() => localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)));
 }
@@ -972,8 +981,11 @@ function saveDraft() {
 function restoreDraft() {
   const saved = safeStorage(() => JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"));
   if (!saved) return;
-  if (typeof saved.prompt === "string") el.prompt.value = saved.prompt;
-  if (typeof saved.negativePrompt === "string") el.negativePrompt.value = saved.negativePrompt;
+  // Settings are preferences and always come back. The written prompt is
+  // content, so it is dropped once it is stale.
+  const fresh = Number.isFinite(saved.savedAt) && Date.now() - saved.savedAt < DRAFT_TTL_MS;
+  if (fresh && typeof saved.prompt === "string") el.prompt.value = saved.prompt;
+  if (fresh && typeof saved.negativePrompt === "string") el.negativePrompt.value = saved.negativePrompt;
   if (MODE_KINDS[saved.mode]) state.mode = saved.mode;
   if (saved.modelByMode && typeof saved.modelByMode === "object") state.modelByMode = { ...state.modelByMode, ...saved.modelByMode };
   if (typeof saved.ratio === "string") state.ratio = saved.ratio;
@@ -1239,6 +1251,11 @@ async function pollJob() {
     state.pollTimer = window.setTimeout(pollJob, document.hidden ? 12_000 : 5_000);
   } catch (error) {
     state.statusFailureCount += 1;
+    if (state.statusFailureCount >= MAX_STATUS_FAILURES) {
+      forgetActiveJob();
+      showError("This generation could not be followed any longer. Any finished clip is in HISTORY. Start a new one when you are ready.");
+      return;
+    }
     setBusyPreview(state.phase === "saving" ? "saving" : state.phase === "rendering" ? "rendering" : "queued", "Reconnecting to live status. Venice keeps working while this device reconnects.");
     state.pollTimer = window.setTimeout(pollJob, 12_000);
   } finally {
@@ -1318,21 +1335,58 @@ function setResult(blob, name, streamUrl) {
   if (window.matchMedia("(max-width: 999px)").matches) el.previewFrame.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-function resetForAnother() {
+function forgetActiveJob() {
+  clearTimeout(state.pollTimer);
   clearTimeout(state.clockTimer);
+  state.pollTimer = null;
+  state.clockTimer = null;
+  state.job = null;
+  state.jobStatus = null;
+  state.startedAt = null;
+  state.statusFailureCount = 0;
+  safeStorage(() => localStorage.removeItem(ACTIVE_JOB_KEY));
+}
+
+function clearResult() {
   if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
   state.resultUrl = null;
+  state.playbackSources = [];
+  state.finishedIn = null;
   el.resultVideo.removeAttribute("src");
   el.resultVideo.load();
   el.downloadVideo.removeAttribute("href");
   el.playbackNote.hidden = true;
-  state.playbackSources = [];
+}
+
+// NEW starts from nothing: no prompt, no images, no leftover clip, no job being
+// followed, no saved draft, and a freshly checked connection.
+async function startNewVideo() {
+  forgetActiveJob();
+  clearResult();
+  clearMedia();
+  clearExtraFiles();
+  el.prompt.value = "";
+  el.negativePrompt.value = "";
+  state.quote = null;
+  state.quoteSignature = null;
+  state.promptBeforeOptimize = null;
+  state.sourceAspect = null;
+  state.ratioTouched = false;
   state.phase = "idle";
-  state.finishedIn = null;
+  safeStorage(() => localStorage.removeItem(DRAFT_KEY));
   unlockPreviewRatio();
   showPreview("empty");
+  updatePromptCount();
+  autoGrowPrompt();
+  setText(el.mediaError, "");
+  setText(el.extraStatus, "");
+  el.framingNote.hidden = true;
+  renderModels();
   renderDock();
   el.prompt.focus({ preventScroll: true });
+  await restoreAccess();
+  await loadCatalog();
+  renderDock();
 }
 
 /* -------------------------------------------------------------- device store */
@@ -1378,6 +1432,57 @@ async function readVideoOnDevice(id) {
   }
 }
 
+function deleteVideoDatabase() {
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.deleteDatabase("roam-video-files");
+      request.onsuccess = () => resolve(true);
+      request.onerror = () => resolve(false);
+      request.onblocked = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+function renderStorageSummary() {
+  const items = readHistory();
+  setText(el.storageSummary, items.length
+    ? `${items.length} clip${items.length === 1 ? "" : "s"} saved, plus the current draft.`
+    : "Nothing stored yet.");
+  if (!state.purgeArmed) setText(el.clearStorage, "CLEAR EVERYTHING");
+}
+
+let purgeTimer;
+async function clearStoredData() {
+  if (!state.purgeArmed) {
+    state.purgeArmed = true;
+    setText(el.clearStorage, "TAP AGAIN TO DELETE");
+    el.clearStorage.classList.add("is-danger");
+    clearTimeout(purgeTimer);
+    purgeTimer = window.setTimeout(() => {
+      state.purgeArmed = false;
+      el.clearStorage.classList.remove("is-danger");
+      renderStorageSummary();
+    }, 5000);
+    return;
+  }
+  clearTimeout(purgeTimer);
+  state.purgeArmed = false;
+  el.clearStorage.classList.remove("is-danger");
+  forgetActiveJob();
+  clearResult();
+  for (const key of [HISTORY_KEY, LATEST_VIDEO_KEY, DRAFT_KEY, ACTIVE_JOB_KEY]) {
+    safeStorage(() => localStorage.removeItem(key));
+  }
+  const wiped = await deleteVideoDatabase();
+  renderHistory();
+  renderStorageSummary();
+  showPreview("empty");
+  renderDock();
+  showToast(wiped ? "Everything stored on this device is gone." : "History cleared. Some saved clips are still in use and will clear on reload.");
+}
+
 async function deleteVideoOnDevice(id) {
   try {
     const database = await openVideoDatabase();
@@ -1401,6 +1506,7 @@ function addHistory(entry) {
   for (const removed of items.slice(HISTORY_LIMIT)) void deleteVideoOnDevice(removed.id);
   writeHistory(items.slice(0, HISTORY_LIMIT));
   renderHistory();
+  renderStorageSummary();
 }
 
 function renderHistory() {
@@ -1454,13 +1560,18 @@ async function removeHistoryItem(id) {
   writeHistory(readHistory().filter((item) => item.id !== id));
   await deleteVideoOnDevice(id);
   renderHistory();
+  renderStorageSummary();
 }
 
 async function restoreLatestVideo() {
-  const newest = readHistory()[0]?.id || safeStorage(() => localStorage.getItem(LATEST_VIDEO_KEY));
-  if (!newest) return;
-  const blob = await readVideoOnDevice(newest);
-  if (blob) { setResult(blob, `vivvideo-${newest}.mp4`); state.finishedIn = null; renderDock(); }
+  const newest = readHistory()[0];
+  const id = newest?.id || safeStorage(() => localStorage.getItem(LATEST_VIDEO_KEY));
+  if (!id) return;
+  // An old clip stays in HISTORY, one tap away, rather than filling the preview
+  // of a session that is about to make something new.
+  if (newest?.createdAt && Date.now() - newest.createdAt > RESULT_TTL_MS) return;
+  const blob = await readVideoOnDevice(id);
+  if (blob) { setResult(blob, `vivvideo-${id}.mp4`); state.finishedIn = null; renderDock(); }
 }
 
 /* ------------------------------------------------------------------ drawers */
@@ -1553,13 +1664,13 @@ function wire() {
     if (!state.job) { state.phase = "idle"; showPreview("empty"); }
     onGenerate();
   });
-  el.makeAnother.addEventListener("click", resetForAnother);
+  el.makeAnother.addEventListener("click", () => void startNewVideo());
   el.resultVideo.addEventListener("error", onVideoError);
   el.resultVideo.addEventListener("loadedmetadata", onVideoMetadata);
 
   el.historyButton.addEventListener("click", () => { renderHistory(); openDrawer(el.historyDrawer); });
   el.closeHistory.addEventListener("click", closeDrawer);
-  el.settingsButton.addEventListener("click", () => openDrawer(el.settingsDrawer));
+  el.settingsButton.addEventListener("click", () => { renderStorageSummary(); openDrawer(el.settingsDrawer); });
   el.closeSettings.addEventListener("click", closeDrawer);
   el.scrim.addEventListener("click", closeDrawer);
   el.historyList.addEventListener("click", (event) => {
@@ -1572,6 +1683,7 @@ function wire() {
   el.useApiKey.addEventListener("click", usePersonalApiKey);
   el.unlockShared.addEventListener("click", unlockSharedStudio);
   el.clearAccess.addEventListener("click", clearAccess);
+  el.clearStorage.addEventListener("click", () => void clearStoredData());
   el.apiKey.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); usePersonalApiKey(); } });
   el.sharedPassword.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); unlockSharedStudio(); } });
 
@@ -1592,12 +1704,15 @@ async function initialize() {
   updatePromptCount();
   autoGrowPrompt();
   renderHistory();
+  renderStorageSummary();
   showPreview("empty");
   await restoreAccess();
   void loadCatalog();
 
   const remembered = safeStorage(() => JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || "null"));
-  if (remembered?.queueId && remembered?.accessToken) {
+  const jobIsStale = remembered?.startedAt && Date.now() - remembered.startedAt > JOB_TTL_MS;
+  if (jobIsStale) safeStorage(() => localStorage.removeItem(ACTIVE_JOB_KEY));
+  if (!jobIsStale && remembered?.queueId && remembered?.accessToken) {
     state.job = remembered;
     state.startedAt = remembered.startedAt || Date.now();
     setBusyPreview("queued", "Picking up the generation that was already running.");
