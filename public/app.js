@@ -940,6 +940,7 @@ async function optimizePrompt() {
     const { response, data } = await requestJson("/api/prompt/enhance", {
       prompt: draft,
       inputKind: currentInputKind(),
+      modelId: currentModel()?.id || null,
       modelName: currentModel()?.name || null,
       duration: state.duration,
       aspectRatio: options.aspectRatios?.length ? state.ratio : null,
