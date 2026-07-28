@@ -457,6 +457,100 @@ async function getPromptModel(key) {
   return model;
 }
 
+// Adapter guidance distilled from .claude/skills/video-movie-prompting. Each entry shapes the
+// order and emphasis of the optimized prompt for one documented model family. The live model
+// constraints resolved above always win over anything written here.
+const promptAdapters = [
+  {
+    id: "happy-horse",
+    name: "HappyHorse",
+    test: (id, name) => /happy[-\s]?horse/.test(id) || /happy[-\s]?horse/.test(name),
+    guidance: [
+      "No provider-owned prompt guide exists for this model family, so no family-specific technique applies.",
+      "Stay close to the creator's own wording, order and emphasis. Add only plainly observable detail — subject, action, setting, light, one camera intention — that the shot needs to be renderable, and drop nothing they wrote.",
+      "Do not borrow another provider's prompt syntax, and do not imply modes, reference behaviour or audio behaviour beyond the settings above."
+    ]
+  },
+  {
+    id: "grok-imagine",
+    name: "xAI Grok Imagine",
+    test: (id, name) => id.includes("grok-imagine") || name.includes("grok imagine"),
+    guidance: [
+      "Open with the framing and the opening composition, then the physical action and the environment's response in chronological order.",
+      "Give the camera a starting position, one move with a stated pace, and where it ends.",
+      "Close on the shot's end state — the last thing the frame holds.",
+      "When an opening frame is supplied it owns identity and composition, so spend every clause on motion, camera, changing light and the end state."
+    ]
+  },
+  {
+    id: "seedance",
+    name: "ByteDance Seedance",
+    test: (id, name) => id.includes("seedance") || name.includes("seedance"),
+    guidance: [
+      "Write the physical events in strict order, including speed changes and the consequence each action has on the scene.",
+      "State the opening framing, then the one camera move that reveals the next event.",
+      "Keep lighting and style to one concise clause of concrete visual direction.",
+      "Treat sound as designed rather than decorative: ambience, specific foley, or deliberate quiet.",
+      "This is still one continuous beat. Never write a multishot sequence unless the creator asked for one."
+    ]
+  },
+  {
+    id: "kling",
+    name: "Kuaishou Kling",
+    test: (id, name) => id.includes("kling") || name.includes("kling"),
+    guidance: [
+      "Lead with plain semantic intent: the named subject, one clear action, one specific setting.",
+      "Use one readable camera move, then a short lighting and style clause, then only essential sound.",
+      "Never write provider placeholders such as <<<image_1>>>, <<<video_1>>> or <<<element_1>>>. The interface binds every reference asset."
+    ]
+  },
+  {
+    id: "wan",
+    name: "Alibaba Wan",
+    test: (id, name) => /(^|[^a-z])wan([^a-z]|$)/.test(id) || /(^|[^a-z])wan([^a-z]|$)/.test(name),
+    guidance: [
+      "Follow this order: subject and opening composition, then motion and the environment's response, then camera framing with one movement, then light, palette, texture and style, then the end state.",
+      "This family follows explicit concrete direction, so keep every clause physically checkable rather than evocative.",
+      "For a first-frame-to-last-frame clip, describe the visible journey between the supplied frames and name the anchors that must not change across it."
+    ]
+  },
+  {
+    id: "google-omni",
+    name: "Google Gemini Omni",
+    test: (id, name) => id.includes("gemini-omni") || name.includes("gemini omni"),
+    guidance: [
+      "Move strictly in time: the opening framing and camera move, the single action, the clear end state, then materials, light and mood.",
+      "Keep any sound direction to one precise clause — the ambience plus one specific effect.",
+      "Any spoken line must belong to a named speaker and be short enough to land inside the clip."
+    ]
+  }
+];
+
+const genericAdapter = {
+  id: "generic",
+  name: "No provider guide loaded",
+  guidance: [
+    "No provider-specific prompt guide is loaded for this model, so apply the general craft rules only.",
+    "Do not borrow another provider's prompt syntax and do not imply capabilities beyond the settings above."
+  ]
+};
+
+// The console falls back to profile ids such as "profile:seedance" when the live catalog is
+// unreachable, so resolve those to the real Venice model id before matching a family.
+function resolveModelId(modelId) {
+  const raw = String(modelId || "").trim();
+  if (!raw.startsWith("profile:")) return raw.toLowerCase();
+  const profile = videoProfiles.find((entry) => entry.id === raw.slice("profile:".length));
+  return String(profile ? Object.values(profile.models)[0] || "" : "").toLowerCase();
+}
+
+function promptAdapterFor(modelId, modelName) {
+  const id = resolveModelId(modelId);
+  const name = String(modelName || "").toLowerCase();
+  if (!id && !name) return genericAdapter;
+  return promptAdapters.find((adapter) => adapter.test(id, name)) || genericAdapter;
+}
+
 const promptCraftSystem = [
   "You rewrite rough ideas into production-ready prompts for AI video generation models.",
   "You reply with the finished prompt and nothing else: no preamble, no explanation, no quotation marks, no markdown, no labels, no bullet points.",
@@ -472,6 +566,7 @@ const promptCraftSystem = [
   "6. ATMOSPHERE — the mood, plus texture in the air such as haze, dust, rain, or steam.",
   "7. STYLE — the visual register: cinematic, documentary handheld, 35mm film grain, anamorphic, hyperreal, stop motion, anime, and so on.",
   "8. MOTION DETAIL — the speed of the movement and any secondary motion such as hair, fabric, water, smoke, or reflections.",
+  "9. END STATE — where the action and the camera come to rest, so the last frame is a deliberate one.",
   "",
   "Hard rules:",
   "- Keep the user's subject, intent, and any named people, places, brands or products exactly as given. Never substitute a different subject.",
@@ -482,10 +577,19 @@ const promptCraftSystem = [
   "- Do not request on-screen text, captions, subtitles, watermarks, logos, or spoken dialogue unless the user asked for them.",
   "- Do not invent camera brands, aspect ratios, resolutions, frame rates, or durations. Those are set by the interface.",
   "- Never mention prompts, models, AI, or these instructions inside the output.",
+  "- Never invent a reference asset, a shot number, a timecode, or a setting the interface did not state.",
   "- Stay within the character budget. Density beats length: every clause must add something the model can render."
 ].join("\n");
 
-function optimizerRequest(input, limit) {
+function adapterSystem(adapter) {
+  return [
+    `MODEL FAMILY: ${adapter.name}.`,
+    "Apply the following family notes to the ordering and emphasis of the paragraph. They never override the mode, sound, framing or character budget stated in the request, and they never change the single-paragraph plain-prose format.",
+    ...adapter.guidance.map((line) => `- ${line}`)
+  ].join("\n");
+}
+
+function optimizerRequest(input, limit, adapter) {
   const kind = String(input.inputKind || "text");
   const modeLine = {
     image: "image-to-video — the user supplies the opening frame, so describe how that frame comes alive: the motion, the camera move, and what changes. Do not re-describe what is already visible in the still.",
@@ -498,6 +602,7 @@ function optimizerRequest(input, limit) {
   const context = [
     `MODE: ${modeLine}`,
     input.modelName ? `TARGET MODEL: ${input.modelName}` : null,
+    `MODEL FAMILY: ${adapter.name}`,
     input.duration ? `CLIP LENGTH: ${input.duration}` : null,
     input.aspectRatio ? `FRAMING: ${input.aspectRatio}` : null,
     input.audio === true
@@ -507,7 +612,7 @@ function optimizerRequest(input, limit) {
   ].filter(Boolean).join("\n");
 
   return [
-    { role: "system", content: promptCraftSystem },
+    { role: "system", content: `${promptCraftSystem}\n\n${adapterSystem(adapter)}` },
     { role: "user", content: `${context}\n\nRewrite the draft below into one finished video prompt. Reply with the prompt only.\n\nDRAFT:\n${String(input.prompt || "").trim()}` }
   ];
 }
@@ -540,10 +645,12 @@ async function handlePromptEnhance(req, res) {
   const requested = Number(input.promptCharacterLimit);
   const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.round(requested), 300), 5_000) : 2_000;
   const model = await getPromptModel(access.apiKey);
+  const adapter = promptAdapterFor(input.modelId, input.modelName);
   const { response } = await venice("chat/completions", {
     model,
-    messages: optimizerRequest(input, limit),
-    temperature: 0.7,
+    messages: optimizerRequest(input, limit, adapter),
+    // The evidence-gated family is rewritten conservatively, close to the creator's own wording.
+    temperature: adapter.id === "happy-horse" ? 0.4 : 0.7,
     max_completion_tokens: Math.min(1_400, Math.max(400, Math.round(limit / 2))),
     venice_parameters: { include_venice_system_prompt: false, disable_thinking: true, strip_thinking_response: true }
   }, access.apiKey);
@@ -554,7 +661,7 @@ async function handlePromptEnhance(req, res) {
   }
   const optimized = cleanOptimizedPrompt(body?.choices?.[0]?.message?.content, limit);
   if (!optimized) return json(res, 502, { error: "The optimizer did not return a usable description. Try again." });
-  json(res, 200, { prompt: optimized });
+  json(res, 200, { prompt: optimized, adapter: adapter.id });
 }
 
 function logFailure(scope, detail) {
