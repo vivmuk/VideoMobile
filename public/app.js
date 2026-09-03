@@ -95,7 +95,11 @@ const el = {
   clearAccess: $("#clear-access"),
   clearStorage: $("#clear-storage"),
   storageSummary: $("#storage-summary"),
-  toast: $("#toast")
+  toast: $("#toast"),
+  sourceTagBadge: $("#source-tag-badge"),
+  tagRow: $("#tag-row"),
+  tagChips: $("#tag-chips"),
+  tagNote: $("#tag-note")
 };
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -112,7 +116,14 @@ const RESULT_TTL_MS = 2 * 60 * 60 * 1000;
 const JOB_TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_STATUS_FAILURES = 5;
 
-const MODE_KINDS = { image: ["image", "transition", "reference"], text: ["text"], video: ["video"] };
+// The four categories the picker offers. `category` on a live model is authoritative;
+// these kinds are only the shape of the request each category produces.
+const MODE_KINDS = { image: ["image", "transition"], text: ["text"], reference: ["reference"], video: ["video"] };
+// Reference uploads are addressable, so the console names them @image1…@imageN and the
+// server rewrites those into whatever the chosen model reads. Loose spellings are
+// matched too, because people type what they see on the thumbnail.
+const REFERENCE_TAG_PATTERN = /@\s*(?:images?|img|refs?|references?|elements?|subjects?)?\s*(\d{1,2})\b/gi;
+const referenceTag = (index) => `@image${index}`;
 const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif";
 const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm";
 
@@ -143,7 +154,7 @@ const state = {
   mode: "image",
   catalog: [],
   live: false,
-  modelByMode: { image: null, text: null, video: null },
+  modelByMode: { image: null, text: null, reference: null, video: null },
   ratio: "9:16",
   duration: "5s",
   resolution: "720p",
@@ -379,11 +390,13 @@ async function loadCatalog() {
   }
 }
 
+// The server already ranks each category — the shortlist first, then everything else
+// newest first — so this preserves its order rather than sorting again.
 function modelsForMode(mode) {
   const kinds = MODE_KINDS[mode] || MODE_KINDS.image;
   if (state.live) {
     return state.catalog
-      .filter((model) => kinds.includes(model.inputKind))
+      .filter((model) => (model.category ? model.category === mode : kinds.includes(model.inputKind)))
       .map((model) => ({
         id: model.id,
         name: model.name || model.id,
@@ -392,12 +405,12 @@ function modelsForMode(mode) {
         inputKind: model.inputKind,
         beta: model.beta === true,
         imageSlots: model.imageSlots,
+        createdAt: Number(model.createdAt) || 0,
         recommended: model.recommended === true,
         options: { ...DEFAULT_OPTIONS, ...(model.options || {}) }
-      }))
-      .sort((a, b) => Number(b.recommended) - Number(a.recommended));
+      }));
   }
-  if (mode === "video") return [];
+  if (mode === "video" || mode === "reference") return [];
   return fallbackProfiles
     .filter((profile) => profile[mode === "image" ? "image" : "text"])
     .map((profile) => ({
@@ -440,9 +453,10 @@ function renderModels() {
     el.modelSelect.disabled = true;
   } else {
     el.modelSelect.disabled = false;
+    const newest = Math.max(...models.map((model) => model.createdAt || 0));
     const groups = [
       ["RECOMMENDED", models.filter((model) => model.recommended)],
-      [state.live ? "ALL VENICE MODELS" : "MORE", models.filter((model) => !model.recommended)]
+      [state.live ? "ALL MODELS · NEWEST FIRST" : "MORE", models.filter((model) => !model.recommended)]
     ];
     for (const [label, entries] of groups) {
       if (!entries.length) continue;
@@ -452,7 +466,12 @@ function renderModels() {
         const option = document.createElement("option");
         option.value = model.id;
         const slots = Number.isInteger(model.imageSlots) ? model.imageSlots : FALLBACK_IMAGE_SLOTS[model.inputKind] ?? 1;
-        option.textContent = `${model.name}${model.beta ? " · beta" : ""}${slots > 1 ? ` · ${slots} images` : ""}`;
+        const notes = [
+          newest > 0 && model.createdAt === newest ? "NEW" : null,
+          model.beta ? "beta" : null,
+          slots > 1 ? `${slots} images` : null
+        ].filter(Boolean);
+        option.textContent = notes.length ? `${model.name} · ${notes.join(" · ")}` : model.name;
         group.append(option);
       }
       el.modelSelect.append(group);
@@ -476,12 +495,15 @@ function fillSelect(select, values, selected, label) {
 function syncOptions() {
   const model = currentModel();
   const options = currentOptions();
-  const durations = options.durations?.length ? options.durations : DEFAULT_OPTIONS.durations;
+  // Every control below is driven by the selected model's own published limits. An
+  // empty list means Venice does not let this model be told, so the control is hidden
+  // and the parameter is never sent — a guessed setting is worse than the model's own.
+  const durations = options.durations || [];
   const ratios = options.aspectRatios || [];
   const resolutions = options.resolutions || [];
   const upscales = options.upscaleFactors || [];
 
-  if (!durations.includes(state.duration)) state.duration = durations[0];
+  if (durations.length && !durations.includes(state.duration)) state.duration = durations[0];
   if (ratios.length && !ratios.includes(state.ratio)) state.ratio = ratios[0];
   if (resolutions.length && !resolutions.includes(state.resolution)) state.resolution = resolutions[0];
   if (upscales.length && !upscales.includes(state.upscaleFactor)) state.upscaleFactor = upscales[0];
@@ -491,7 +513,8 @@ function syncOptions() {
   const audioConfigurable = options.audioConfigurable === true;
   state.audio = audioConfigurable ? state.audioPreference : options.audioAvailable === true;
 
-  fillSelect(el.durationSelect, durations, state.duration, (value) => (value === "Auto" ? "Auto" : value.replace("s", " sec")));
+  fillSelect(el.durationSelect, durations.length ? durations : ["model"], durations.length ? state.duration : "model", (value) => (value === "model" ? "Model decides" : value === "Auto" ? "Auto" : value.replace("s", " sec")));
+  el.durationSelect.disabled = !durations.length;
   const ratioChoosable = options.aspectRatioConfigurable && ratios.length > 0;
   if (ratioChoosable) {
     fillSelect(el.ratioSelect, ratios, state.ratio, (value) => `${value}${value === "9:16" ? " tall" : value === "16:9" ? " wide" : value === "1:1" ? " square" : ""}`);
@@ -503,9 +526,10 @@ function syncOptions() {
   fillSelect(el.upscaleSelect, upscales, state.upscaleFactor, (value) => `${value}× sharper`);
 
   el.ratioControl.classList.toggle("is-locked", !ratioChoosable);
+  el.durationControl.classList.toggle("is-locked", !durations.length);
   el.resolutionControl.hidden = !(options.resolutionConfigurable && resolutions.length);
   el.upscaleControl.hidden = !upscales.length;
-  el.durationControl.hidden = durations.length <= 1 && durations[0] === "Auto" && upscales.length > 0;
+  el.durationControl.hidden = upscales.length > 0 && durations.length <= 1;
 
   el.audio.checked = state.audio;
   el.audio.disabled = !audioConfigurable;
@@ -524,7 +548,7 @@ function syncOptions() {
       text: "Starts from your words only.",
       image: "Needs one starting image.",
       transition: "Combines two images: the clip travels from the first to the last.",
-      reference: `Combines up to ${imageSlots()} images of one subject to keep it consistent.`,
+      reference: `Takes up to ${imageSlots()} images. Tag them @image1, @image2… in your description.`,
       video: "Needs a source video."
     }[model.inputKind] || "";
     el.modelHint.innerHTML = "";
@@ -547,7 +571,7 @@ function renderSpec(model, options) {
   const rows = [
     ["Model ID", model.profileId ? "resolved by the server" : model.id],
     ["Privacy", model.privacy || "See Venice settings"],
-    ["Lengths", (options.durations || []).join(", ") || "—"],
+    ["Lengths", (options.durations || []).join(", ") || "Fixed by the model"],
     ["Shapes", (options.aspectRatios || []).join(", ") || "Fixed by the model"],
     ["Quality", (options.resolutions || []).join(", ") || (options.upscaleFactors || []).map((value) => `${value}×`).join(", ") || "Fixed by the model"],
     ["Sound", options.audioConfigurable ? "Optional" : options.audioAvailable ? "Always on" : "None"],
@@ -580,6 +604,7 @@ function setMode(mode) {
 
 function renderSource() {
   const kind = currentInputKind();
+  renderReferenceTags(kind);
   const needsVideo = kind === "video";
   el.sourcePanel.hidden = kind === "text";
   if (kind === "text") { renderExtraFrames(kind); return; }
@@ -587,7 +612,7 @@ function renderSource() {
   const copy = {
     image: { title: "STARTING IMAGE", upload: "Add the photo to animate", detail: "JPG, PNG, WebP or GIF · max 25 MB", choose: "CHOOSE PHOTO" },
     transition: { title: "FIRST FRAME", upload: "Add the opening frame", detail: "Then add the last frame below.", choose: "CHOOSE FIRST" },
-    reference: { title: "MAIN REFERENCE", upload: "Add the subject to keep consistent", detail: "Then add more angles of it below.", choose: "CHOOSE IMAGE" },
+    reference: { title: "REFERENCE @image1", upload: "Add your first reference", detail: "A character, product, or place to keep consistent.", choose: "CHOOSE IMAGE" },
     video: { title: "SOURCE VIDEO", upload: "Add the video to work from", detail: "MP4, MOV or WebM · max 25 MB", choose: "CHOOSE VIDEO" }
   }[kind];
 
@@ -601,6 +626,83 @@ function renderSource() {
   el.pasteMedia.hidden = needsVideo;
   el.photoInput.accept = needsVideo ? VIDEO_ACCEPT : IMAGE_ACCEPT;
   renderExtraFrames(kind);
+}
+
+/* --------------------------------------------------------- reference tags */
+
+const referenceCount = () => (state.file ? 1 + state.extraFiles.length : 0);
+
+// Every reference image is addressable, so the console names them @image1…@imageN and
+// offers each one as a chip. The server rewrites these into whatever the selected
+// model reads — @Element2 for Kling, @image2 elsewhere — so one syntax works
+// everywhere and the creator never has to learn a vendor's token.
+function renderReferenceTags(kind = currentInputKind()) {
+  const count = referenceCount();
+  const isReference = kind === "reference";
+  el.tagRow.hidden = !isReference || count === 0;
+  el.sourceTagBadge.hidden = !isReference || !state.file;
+  if (el.tagRow.hidden) return;
+
+  el.tagChips.replaceChildren();
+  for (let index = 1; index <= count; index += 1) {
+    const tag = referenceTag(index);
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip chip-tag";
+    chip.dataset.tag = tag;
+    chip.textContent = tag;
+    chip.title = `Insert ${tag} into your description`;
+    chip.setAttribute("aria-label", `Insert ${tag} into your description`);
+    if (promptTagIndexes().includes(index)) chip.classList.add("is-used");
+    el.tagChips.append(chip);
+  }
+  const unused = Array.from({ length: count }, (_, index) => index + 1).filter((index) => !promptTagIndexes().includes(index));
+  setText(el.tagNote, unused.length === count
+    ? "Tap a tag to name an image in your description. Untagged images are still all used."
+    : unused.length
+      ? `${unused.map(referenceTag).join(" and ")} ${unused.length > 1 ? "are" : "is"} not named yet.`
+      : "Every reference is named in your description.");
+}
+
+function promptTagIndexes() {
+  const indexes = [];
+  for (const match of el.prompt.value.matchAll(REFERENCE_TAG_PATTERN)) {
+    const index = Number(match[1]);
+    if (index > 0 && !indexes.includes(index)) indexes.push(index);
+  }
+  return indexes;
+}
+
+function insertReferenceTag(tag) {
+  const field = el.prompt;
+  const start = field.selectionStart ?? field.value.length;
+  const end = field.selectionEnd ?? start;
+  const spaced = start > 0 && !/\s$/.test(field.value.slice(0, start)) ? ` ${tag} ` : `${tag} `;
+  field.setRangeText(spaced, start, end, "end");
+  state.promptBeforeOptimize = null;
+  field.focus();
+  onPromptInput();
+}
+
+// Dropping a reference image renumbers the ones after it, so the description's own
+// tags are rewritten to match instead of quietly pointing at the wrong subject. Loose
+// spellings are normalised on the way through.
+function renumberPromptTags(removed) {
+  const before = el.prompt.value;
+  const after = before
+    .replace(REFERENCE_TAG_PATTERN, (match, digits) => {
+      const index = Number(digits);
+      if (index === removed) return "";
+      return referenceTag(index > removed ? index - 1 : index);
+    })
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([,;])\s*(?=[,.;:!?])/g, "")
+    .trim();
+  if (after === before) return;
+  el.prompt.value = after;
+  state.promptBeforeOptimize = null;
+  onPromptInput();
 }
 
 function clearExtraFiles() {
@@ -629,12 +731,12 @@ function renderExtraFrames(kind) {
     state.extraFiles = state.extraFiles.slice(0, extraSlots);
   }
   el.extraFile.multiple = extraSlots > 1;
-  setText(el.extraLabel, kind === "transition" ? "LAST FRAME" : "MORE ANGLES OF THE SAME SUBJECT");
+  setText(el.extraLabel, kind === "transition" ? "LAST FRAME" : "MORE REFERENCES");
   setText(el.extraCount, `${state.extraFiles.length} / ${extraSlots}`);
   if (!state.extraFiles.length) {
     setText(el.extraStatus, kind === "transition"
       ? "The clip travels from your first image to this one."
-      : "Optional. More angles keep the subject consistent as it moves.");
+      : "Optional. Add another subject, or another angle of the same one.");
   }
   renderFrameTray(kind, extraSlots);
 }
@@ -656,9 +758,17 @@ function renderFrameTray(kind, extraSlots) {
     drop.setAttribute("aria-label", `Remove ${file.name || "this image"}`);
     drop.innerHTML = '<svg class="ico"><use href="#i-x"></use></svg>';
 
-    const tag = document.createElement("span");
+    const tag = document.createElement(kind === "transition" ? "span" : "button");
     tag.className = "frame-tag";
-    tag.textContent = kind === "transition" ? "LAST" : `REF ${index + 2}`;
+    if (kind === "transition") {
+      tag.textContent = "LAST";
+    } else {
+      tag.type = "button";
+      tag.className = "frame-tag frame-tag-button";
+      tag.dataset.tag = referenceTag(index + 2);
+      tag.textContent = referenceTag(index + 2);
+      tag.title = `Insert ${referenceTag(index + 2)} into your description`;
+    }
 
     slot.append(image, drop, tag);
     el.frameTray.append(slot);
@@ -681,12 +791,16 @@ function renderFrameTray(kind, extraSlots) {
 }
 
 function removeExtraFile(index) {
+  const kind = currentInputKind();
   URL.revokeObjectURL(state.extraPreviews[index]);
   state.extraPreviews.splice(index, 1);
   state.extraFiles.splice(index, 1);
   state.endMediaToken = null;
   state.referenceMediaTokens = [];
-  renderExtraFrames(currentInputKind());
+  // This image was @image{index + 2}; everything above it shifts down by one.
+  if (kind === "reference") renumberPromptTags(index + 2);
+  renderExtraFrames(kind);
+  renderReferenceTags(kind);
   invalidateQuote();
   renderDock();
 }
@@ -709,6 +823,7 @@ function clearMedia() {
   el.photoInput.value = "";
   el.cameraInput.value = "";
   setText(el.mediaError, "");
+  renderReferenceTags();
   invalidateQuote();
   renderDock();
 }
@@ -765,6 +880,7 @@ async function selectMedia(file) {
   el.dropEmpty.hidden = true;
   el.mediaPreview.hidden = false;
   state.uploading = true;
+  renderReferenceTags();
   renderDock();
   try {
     const body = await uploadMedia(file);
@@ -842,6 +958,7 @@ async function selectExtraFiles(files) {
     if (kind === "transition") state.endMediaToken = uploaded[0].mediaToken;
     else state.referenceMediaTokens = [...state.referenceMediaTokens, ...uploaded.map((body) => body.mediaToken)];
     renderExtraFrames(kind);
+    renderReferenceTags(kind);
     setText(el.extraStatus, skipped
       ? `Added ${chosen.length}. This model takes ${imageSlots()} images in total.`
       : `${state.extraFiles.length + 1} image${state.extraFiles.length ? "s" : ""} will go into this video.`);
@@ -893,6 +1010,7 @@ function autoGrowPrompt() {
 function onPromptInput() {
   updatePromptCount();
   autoGrowPrompt();
+  renderReferenceTags();
   saveDraft();
   invalidateQuote();
   renderDock();
@@ -940,6 +1058,7 @@ async function optimizePrompt() {
     const { response, data } = await requestJson("/api/prompt/enhance", {
       prompt: draft,
       inputKind: currentInputKind(),
+      referenceTags: currentInputKind() === "reference" ? promptTagIndexes().map(referenceTag) : [],
       modelId: currentModel()?.id || null,
       modelName: currentModel()?.name || null,
       duration: state.duration,
@@ -1038,6 +1157,10 @@ function readiness() {
   }
   if (state.uploading) return { ok: false, message: "Preparing your file…" };
   if (kind === "transition" && !state.extraFiles.length) return { ok: false, message: "Add the ending frame." };
+  if (kind === "reference") {
+    const beyond = promptTagIndexes().find((index) => index > referenceCount());
+    if (beyond) return { ok: false, message: `Your description mentions ${referenceTag(beyond)}, but only ${referenceCount()} ${referenceCount() === 1 ? "image is" : "images are"} attached.` };
+  }
   return { ok: true, message: "Ready to generate" };
 }
 
@@ -1616,7 +1739,13 @@ function wire() {
   el.photoInput.addEventListener("change", () => selectMedia(el.photoInput.files?.[0]));
   el.cameraInput.addEventListener("change", () => selectMedia(el.cameraInput.files?.[0]));
   el.extraFile.addEventListener("change", () => selectExtraFiles(el.extraFile.files));
+  el.tagChips.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-tag]");
+    if (chip) insertReferenceTag(chip.dataset.tag);
+  });
   el.frameTray.addEventListener("click", (event) => {
+    const tag = event.target.closest(".frame-tag-button");
+    if (tag) return insertReferenceTag(tag.dataset.tag);
     const drop = event.target.closest("[data-drop-index]");
     if (drop) removeExtraFile(Number(drop.dataset.dropIndex));
   });
