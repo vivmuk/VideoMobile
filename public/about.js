@@ -5,9 +5,11 @@ const MODE_LABEL = {
   text: "TEXT → VIDEO",
   image: "IMAGE → VIDEO",
   transition: "TWO IMAGES",
-  reference: "REFERENCE",
+  reference: "REFERENCE → VIDEO",
   video: "VIDEO → VIDEO"
 };
+const CATEGORY_LABEL = { image: "IMAGE → VIDEO", text: "TEXT → VIDEO", reference: "REFERENCE → VIDEO", video: "VIDEO → VIDEO" };
+const CATEGORY_ORDER = ["image", "text", "reference", "video"];
 
 const safeStorage = (action) => { try { return action(); } catch { return null; } };
 
@@ -28,7 +30,8 @@ function card(model) {
   if (model.beta) entries.push(["BETA", "badge badge-warn"]);
   if (String(model.privacy).toLowerCase() === "private") entries.push(["PRIVATE", "badge badge-warn"]);
   const lengths = model.options?.durations?.join(", ");
-  if (lengths) entries.push([lengths, "badge"]);
+  entries.push([lengths || "LENGTH SET BY MODEL", "badge"]);
+  if (model.imageSlots > 1) entries.push([`${model.imageSlots} IMAGES`, "badge"]);
   for (const [label, className] of entries) {
     const badge = document.createElement("span");
     badge.className = className;
@@ -55,9 +58,18 @@ async function loadLiveModels() {
     const data = await response.json().catch(() => ({}));
     const models = Array.isArray(data.advancedModels) ? data.advancedModels : [];
     if (!models.length) return;
-    models.sort((a, b) => Number(b.recommended) - Number(a.recommended) || String(a.name).localeCompare(String(b.name)));
-    note.textContent = `${models.length} Venice video models are available to this account right now.`;
-    grid.replaceChildren(...models.map(card));
+    note.textContent = `${models.length} Venice video models are available to this account right now, grouped the way the console groups them: the shortlist first, then everything else newest first.`;
+    // The server already ranks each category, so this only adds the headings.
+    const sections = [];
+    for (const category of CATEGORY_ORDER) {
+      const inCategory = models.filter((model) => (model.category || model.inputKind) === category);
+      if (!inCategory.length) continue;
+      const heading = document.createElement("h3");
+      heading.className = "live-group";
+      heading.textContent = CATEGORY_LABEL[category];
+      sections.push(heading, ...inCategory.map(card));
+    }
+    grid.replaceChildren(...sections);
   } catch {
     // The written guide above stays useful even when the live list cannot load.
   }

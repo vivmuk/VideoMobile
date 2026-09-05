@@ -6,7 +6,9 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 
 const PORT = Number(process.env.PORT || 3000);
-const VENICE_BASE = "https://api.venice.ai/api/v1";
+// Overridable so the studio can be pointed at a Venice-compatible stub in a test or a
+// staging environment. Production leaves it unset.
+const VENICE_BASE = (process.env.VENICE_BASE_URL || "https://api.venice.ai/api/v1").replace(/\/+$/, "");
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const MEDIA_TTL_MS = 15 * 60 * 1000;
 const DATA_DIR = join(process.cwd(), "data");
@@ -307,7 +309,7 @@ function profileResponse(profile, catalog) {
   const image = modelForProfile(profile, catalog, true);
   return {
     id: profile.id,
-    name: profile.name,
+    name: text?.model_spec?.name || image?.model_spec?.name || profile.provider,
     provider: text?.model_spec?.name || image?.model_spec?.name || profile.provider,
     description: profile.description,
     privacy: profile.privacy,
@@ -318,81 +320,247 @@ function profileResponse(profile, catalog) {
   };
 }
 
-function supportsSource(model, hasImage) {
-  return modelInputKind(model) === (hasImage ? "image" : "text");
-}
+const modelSlug = (value) => String(value || "").toLowerCase();
 
+// Five input kinds cover every video model Venice publishes. They decide the payload
+// shape, so they stay exactly as the queue handler expects them.
 function modelInputKind(model) {
-  const id = model?.id || "";
+  const id = modelSlug(model?.id);
   const type = model?.model_spec?.constraints?.model_type;
-  if (type === "video" || id.includes("video-to-video") || id.includes("motion-control") || id.includes("upscale")) return "video";
-  if (id.includes("transition")) return "transition";
-  if (id.includes("reference-to-video")) return "reference";
+  if (type === "video" || id.includes("video-to-video") || id.includes("motion-control") || id.includes("upscale") || id.includes("aleph")) return "video";
+  if (id.includes("first-last-frame") || id.includes("transition")) return "transition";
+  if (id.includes("reference-to-video") || id.includes("reference-image")) return "reference";
   if (type === "image-to-video" || id.includes("image-to-video")) return "image";
   return "text";
 }
 
-function recommendedProfileFor(modelId) {
-  return videoProfiles.find((profile) => Object.values(profile.models).includes(modelId)) || null;
+// The picker offers four categories. Transitions start from stills, so they belong
+// with the other image-led models rather than in a category of their own.
+const MODEL_CATEGORIES = ["image", "text", "reference", "video"];
+const categoryForKind = (kind) => (kind === "transition" ? "image" : kind);
+
+// Ordered hints used only to seed the two or three RECOMMENDED entries at the top of
+// each category. A family here is a suggestion, never a filter: every model the
+// account can reach still appears underneath, newest first.
+const recommendedFamilies = {
+  text: ["seedance", "veo", "kling", "sora", "wan", "grok-imagine", "ltx"],
+  image: ["seedance", "kling", "wan", "veo", "grok-imagine", "sora", "ltx"],
+  reference: ["kling", "vidu", "wan", "seedance", "pixverse"],
+  video: ["wan", "runway", "kling", "seedance", "ltx"]
+};
+const RECOMMENDED_PER_CATEGORY = 3;
+
+// Task and qualifier words carry no generation information, so they are dropped
+// before an id is split into a family and a version.
+const TASK_WORDS = ["text-to-video", "image-to-video", "reference-to-video", "video-to-video", "first-last-frame", "reference-image", "motion-control", "transition", "upscale"];
+const QUALIFIER_WORDS = ["private", "uncensored", "fast", "pro", "standard", "turbo", "plus", "lite", "mini", "max", "preview", "beta", "hd", "quality"];
+
+// Venice writes a model's generation into its id — wan-2-7, seedance-2-0, kling-o3,
+// ltx-2-v2-3 — so the newest variant of a family is answerable without a table that
+// would go stale the moment Venice ships another model.
+function modelIdentity(id) {
+  let slug = modelSlug(id);
+  for (const word of TASK_WORDS) slug = slug.split(word).join("-");
+  const tokens = slug.split("-").filter((token) => token && !QUALIFIER_WORDS.includes(token));
+  const firstVersion = tokens.findIndex((token) => /\d/.test(token));
+  const nameTokens = firstVersion === -1 ? tokens : tokens.slice(0, firstVersion);
+  const version = firstVersion === -1
+    ? []
+    : tokens.slice(firstVersion).flatMap((token) => (token.match(/\d+/g) || []).map(Number));
+  return { family: nameTokens.join("-") || slug, version };
 }
 
-function imageSlotsFor(kind) {
-  if (kind === "transition") return 2;
-  if (kind === "reference") return MAX_REFERENCE_IMAGES;
-  if (kind === "image" || kind === "video") return 1;
+function compareVersions(left, right) {
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (left[index] ?? -1) - (right[index] ?? -1);
+    if (difference !== 0) return difference;
+  }
   return 0;
 }
 
-function advancedModelResponse(model) {
+// Newest first. Venice stamps each model with `created`, which is the only honest
+// recency signal; the parsed version breaks ties inside a family, and the catalog's
+// own order breaks anything still level so the list never reshuffles between loads.
+function compareByRecency(a, b) {
+  if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
+  const version = compareVersions(b.version, a.version);
+  if (version !== 0) return version;
+  return a.order - b.order;
+}
+
+function modelCreatedAt(model) {
+  const created = Number(model?.created ?? model?.model_spec?.created);
+  return Number.isFinite(created) && created > 0 ? created : 0;
+}
+
+// Reference models do not share one prompt syntax. Kling addresses each subject
+// through an elements[] entry and @ElementN in the prompt; everything else takes a
+// flat reference_image_urls array. The console always shows the creator
+// @image1…@imageN and this table decides what those become on the wire.
+const referenceSchemes = [
+  { test: (id) => id.includes("kling"), scheme: "elements", label: "Element", maxImages: 4 },
+  { test: () => true, scheme: "reference-urls", label: "image", maxImages: MAX_REFERENCE_IMAGES }
+];
+
+function referenceSchemeFor(modelId) {
+  const id = modelSlug(modelId);
+  return referenceSchemes.find((entry) => entry.test(id));
+}
+
+// The console labels every reference upload @image1…@imageN, so that is the syntax a
+// creator types. Loose spellings are accepted too, because people type what they see
+// on the thumbnail rather than a documented token. The two-digit bound plus the word
+// boundary keep an ordinary "@2026" in a prompt from reading as a reference.
+const REFERENCE_TAG_PATTERN = /@\s*(?:images?|img|refs?|references?|elements?|subjects?)?\s*(\d{1,2})\b/gi;
+
+function referenceTagsIn(prompt) {
+  const indexes = [];
+  for (const match of String(prompt).matchAll(REFERENCE_TAG_PATTERN)) {
+    const index = Number(match[1]);
+    if (index > 0 && !indexes.includes(index)) indexes.push(index);
+  }
+  return indexes;
+}
+
+// Rewrites the creator's @imageN into the token the selected reference model actually
+// reads — @ElementN for Kling, @imageN everywhere else — so one console syntax works
+// across every reference model Venice offers.
+function bindReferenceTags(prompt, label, count) {
+  const beyond = referenceTagsIn(prompt).find((index) => index > count);
+  if (beyond) {
+    throw inputError(`Your description mentions @image${beyond}, but only ${count} reference image${count === 1 ? " is" : "s are"} attached. Add it, or remove the tag.`);
+  }
+  const bound = prompt.replace(REFERENCE_TAG_PATTERN, (match, digits) => {
+    const index = Number(digits);
+    return index >= 1 && index <= count ? `@${label}${index}` : match;
+  });
+  // An untagged prompt would leave the extra references unused, so bind them all up
+  // front and let the description that follows say what they do.
+  if (referenceTagsIn(prompt).length) return bound;
+  const tags = Array.from({ length: count }, (_, index) => `@${label}${index + 1}`).join(" ");
+  return `${tags} ${bound}`.trim();
+}
+
+function imageSlotsFor(model, kind) {
+  if (kind === "transition") return 2;
+  if (kind === "image" || kind === "video") return 1;
+  if (kind !== "reference") return 0;
+  const constraints = model?.model_spec?.constraints || {};
+  const declared = [constraints.max_reference_images, constraints.reference_images, constraints.max_images]
+    .map(Number)
+    .find((value) => Number.isInteger(value) && value > 0);
+  return Math.min(declared || referenceSchemeFor(model?.id).maxImages, MAX_REFERENCE_IMAGES);
+}
+
+function advancedModelResponse(model, order) {
   const spec = model.model_spec || {};
-  const recommended = recommendedProfileFor(model.id);
+  const kind = modelInputKind(model);
+  const identity = modelIdentity(model.id);
   return {
     id: model.id,
     name: spec.name || model.id,
     provider: model.id,
     description: spec.description || "Use Venice's live quote to check this model's current options and price.",
     privacy: spec.privacy || "Check Venice settings",
-    supportsText: supportsSource(model, false),
-    supportsPhoto: supportsSource(model, true),
-    inputKind: modelInputKind(model),
+    supportsText: kind === "text",
+    supportsPhoto: kind === "image",
+    inputKind: kind,
+    category: categoryForKind(kind),
+    family: identity.family,
+    version: identity.version,
+    createdAt: modelCreatedAt(model),
+    order,
     options: modelOptions(model),
     bestFor: modelBestFor(model),
-    imageSlots: imageSlotsFor(modelInputKind(model)),
-    recommended: Boolean(recommended),
-    recommendedAs: recommended?.name || null,
+    imageSlots: imageSlotsFor(model, kind),
+    referenceLabel: kind === "reference" ? referenceSchemeFor(model.id).label : null,
+    recommended: false,
+    recommendedRank: null,
     beta: spec.beta === true || spec.betaModel === true
   };
 }
 
+// Two or three shortlisted models per category: the newest variant of each preferred
+// family, topped up with the newest models the category actually has so a category
+// full of families nobody has heard of still gets a shortlist.
+function pickRecommended(category, models) {
+  const newestByFamily = new Map();
+  for (const model of models) {
+    const existing = newestByFamily.get(model.family);
+    if (!existing || compareByRecency(model, existing) < 0) newestByFamily.set(model.family, model);
+  }
+  const chosen = [];
+  for (const family of recommendedFamilies[category] || []) {
+    if (chosen.length >= RECOMMENDED_PER_CATEGORY) break;
+    const best = newestByFamily.get(family);
+    if (best) chosen.push(best);
+  }
+  for (const pass of [true, false]) {
+    for (const model of models) {
+      if (chosen.length >= RECOMMENDED_PER_CATEGORY) break;
+      if (chosen.includes(model)) continue;
+      if (pass && chosen.some((entry) => entry.family === model.family)) continue;
+      chosen.push(model);
+    }
+  }
+  return chosen;
+}
+
 function simpleVideoModels(catalog) {
-  return catalog.map(advancedModelResponse);
+  const models = catalog.map((model, index) => advancedModelResponse(model, index));
+  const ordered = [];
+  for (const category of MODEL_CATEGORIES) {
+    const inCategory = models.filter((model) => model.category === category).sort(compareByRecency);
+    // The shortlist is chosen by family but presented newest first, so the very top of
+    // the picker is both recommended and the most recent thing Venice has shipped.
+    const shortlist = pickRecommended(category, inCategory).sort(compareByRecency);
+    for (const [rank, model] of shortlist.entries()) {
+      model.recommended = true;
+      model.recommendedRank = rank;
+    }
+    // Recommended first in shortlist order, then everything else newest first.
+    ordered.push(...inCategory.sort((a, b) => {
+      if (a.recommended !== b.recommended) return a.recommended ? -1 : 1;
+      if (a.recommended) return a.recommendedRank - b.recommendedRank;
+      return compareByRecency(a, b);
+    }));
+  }
+  return ordered;
 }
 
 function stringValues(values) {
   return Array.isArray(values) ? values.filter((value) => typeof value === "string" && value.length > 0) : [];
 }
 
+// Used only while Venice's catalog is unreachable. `known: false` tells the rest of
+// the server that these numbers are assumptions rather than the model's own limits.
+const unknownModelOptions = {
+  known: false,
+  durations: fallbackDurations,
+  aspectRatios: fallbackRatios,
+  resolutions: fallbackResolutions,
+  aspectRatioConfigurable: true,
+  resolutionConfigurable: true,
+  audioAvailable: true,
+  audioConfigurable: true,
+  promptCharacterLimit: 2_500,
+  upscaleFactors: []
+};
+
+// A model's settings come from its own `model_spec.constraints` and nowhere else. A
+// list Venice does not publish stays empty, and an empty list means the control is
+// hidden and the parameter is never sent — a guessed "5s" is worse than letting the
+// model choose.
 function modelOptions(model) {
-  if (!model) {
-    return {
-      durations: fallbackDurations,
-      aspectRatios: fallbackRatios,
-      resolutions: fallbackResolutions,
-      aspectRatioConfigurable: true,
-      resolutionConfigurable: true,
-      audioAvailable: true,
-      audioConfigurable: true,
-      promptCharacterLimit: 2_500,
-      upscaleFactors: []
-    };
-  }
+  if (!model) return unknownModelOptions;
   const constraints = model?.model_spec?.constraints || {};
   const durations = stringValues(constraints.durations);
   const aspectRatios = stringValues(constraints.aspect_ratios);
   const resolutions = stringValues(constraints.resolutions);
   const isUpscale = model.id.includes("upscale") || (resolutions.length > 0 && resolutions.every((value) => /^\d+x$/i.test(value)));
   return {
-    durations: durations.length ? durations : isUpscale ? ["Auto"] : fallbackDurations,
+    known: true,
+    durations: isUpscale && !durations.length ? ["Auto"] : durations,
     aspectRatios,
     resolutions: isUpscale ? [] : resolutions,
     aspectRatioConfigurable: aspectRatios.length > 0,
@@ -409,15 +577,15 @@ function modelBestFor(model) {
   if (id.includes("upscale")) return "Improving the detail of an existing video.";
   if (id.includes("motion-control")) return "Applying movement from a source video to a new look.";
   if (id.includes("video-to-video") || id.includes("aleph")) return "Restyling or editing an existing video.";
-  if (id.includes("transition")) return "Creating a smooth transition between two images.";
-  if (id.includes("reference-to-video")) return "Keeping a character, product, or scene consistent from reference images.";
+  if (id.includes("first-last-frame") || id.includes("transition")) return "Creating a smooth transition between two images.";
+  if (id.includes("reference-to-video") || id.includes("reference-image")) return "Keeping a character, product, or scene consistent from reference images.";
   if (id.includes("wan-2-7") || id.includes("uncensored")) return "Venice's uncensored creative direction; be explicit and detailed in the prompt.";
   if (id.includes("grok-imagine-1-5")) return "Private image-to-video animation with a strong starting frame.";
   if (id.includes("grok-imagine")) return "Private, mood-led storytelling and expressive atmosphere.";
   if (id.includes("seedance")) return "Cinematic shots, specific camera moves, lighting, and detailed direction.";
   if (id.includes("happyhorse")) return "Natural human movement, dance, fitness, and physical action.";
-  if (id.includes("wan-2.6")) return "Flexible image or text animation with audio-aware options.";
-  if (id.includes("wan-2.5")) return "Quick experiments with short, flexible clips.";
+  if (id.includes("wan-2.6") || id.includes("wan-2-6")) return "Flexible image or text animation with audio-aware options.";
+  if (id.includes("wan-2.5") || id.includes("wan-2-5")) return "Quick experiments with short, flexible clips.";
   if (id.includes("veo")) return "Polished short-form scenes with generated sound.";
   if (id.includes("sora")) return "High-fidelity image-led scenes and longer composed clips.";
   if (id.includes("kling")) return "Polished camera work, motion, and production-style shots.";
@@ -501,7 +669,7 @@ const promptAdapters = [
     guidance: [
       "Lead with plain semantic intent: the named subject, one clear action, one specific setting.",
       "Use one readable camera move, then a short lighting and style clause, then only essential sound.",
-      "Never write provider placeholders such as <<<image_1>>>, <<<video_1>>> or <<<element_1>>>. The interface binds every reference asset."
+      "Never write provider placeholders such as <<<image_1>>>, <<<video_1>>> or <<<element_1>>>. The interface binds every reference asset, and any @image tag already in the draft is part of that binding."
     ]
   },
   {
@@ -594,13 +762,22 @@ function optimizerRequest(input, limit, adapter) {
   const modeLine = {
     image: "image-to-video — the user supplies the opening frame, so describe how that frame comes alive: the motion, the camera move, and what changes. Do not re-describe what is already visible in the still.",
     transition: "image-to-video transition — the clip travels from a first image to a last image, so describe the journey and the transformation between them.",
-    reference: "reference-to-video — reference images fix the subject's appearance, so describe the action, camera and setting rather than the subject's looks.",
+    reference: "reference-to-video — reference images fix each subject's appearance, so describe the action, camera and setting rather than what the subjects look like.",
     video: "video-to-video — a source clip already exists, so describe the treatment applied to it: the new look, grade, texture and style, while keeping its existing motion.",
     text: "text-to-video — nothing exists yet, so the prompt must build the entire shot from nothing."
   }[kind] || "text-to-video — the prompt must build the entire shot from nothing.";
 
+  // Reference tags are the creator's binding between a sentence and an uploaded image.
+  // Losing one in a rewrite would silently point the shot at the wrong subject, so the
+  // optimizer is told to carry them through untouched.
+  const tags = Array.isArray(input.referenceTags) ? input.referenceTags.filter((tag) => /^@image\d{1,2}$/.test(tag)) : [];
+  const tagLine = tags.length
+    ? `REFERENCE TAGS: the draft contains ${tags.join(", ")}. Reproduce every one of them exactly as written, attached to the same subject and action as in the draft. Never renumber them, never remove one, and never add a tag that is not in this list.`
+    : null;
+
   const context = [
     `MODE: ${modeLine}`,
+    tagLine,
     input.modelName ? `TARGET MODEL: ${input.modelName}` : null,
     `MODEL FAMILY: ${adapter.name}`,
     input.duration ? `CLIP LENGTH: ${input.duration}` : null,
@@ -691,7 +868,10 @@ async function jobSettings(input, key) {
     throw inputError(`${profile.name} is not available for ${hasImage ? "photo" : "text"} videos right now. Choose another option.`);
   }
   const options = modelOptions(selected);
-  if (typeof input.duration !== "string" || !options.durations.includes(input.duration)) {
+  // Every parameter below is gated on the selected model publishing it. A model that
+  // does not declare durations, a frame shape or a resolution keeps that choice for
+  // itself, and this request stays silent about it rather than sending a guess.
+  if (options.durations.length && (typeof input.duration !== "string" || !options.durations.includes(input.duration))) {
     throw inputError(`${displayName} supports ${options.durations.join(" or ")} clips in this studio.`);
   }
   if (options.aspectRatioConfigurable && (typeof input.aspectRatio !== "string" || !options.aspectRatios.includes(input.aspectRatio))) {
@@ -703,15 +883,16 @@ async function jobSettings(input, key) {
   if (options.upscaleFactors.length && (!options.upscaleFactors.includes(String(input.upscaleFactor)))) {
     throw inputError(`${displayName} supports ${options.upscaleFactors.map((factor) => `${factor}×`).join(" or ")} enhancement.`);
   }
-  const settings = {
-    model: selected?.id || profile.models[hasImage ? "image" : "text"],
-    duration: input.duration
-  };
+  const settings = { model: selected?.id || profile.models[hasImage ? "image" : "text"] };
+  if (options.durations.length) settings.duration = input.duration;
   if (options.aspectRatioConfigurable) settings.aspect_ratio = input.aspectRatio;
   if (options.resolutionConfigurable) settings.resolution = input.resolution;
   if (options.upscaleFactors.length) settings.upscale_factor = Number(input.upscaleFactor);
   if (options.audioConfigurable) settings.audio = Boolean(input.audio);
-  Object.defineProperty(settings, "inputKind", { value: selected ? modelInputKind(selected) : hasImage ? "image" : "text", enumerable: false });
+  const inputKind = selected ? modelInputKind(selected) : hasImage ? "image" : "text";
+  Object.defineProperty(settings, "inputKind", { value: inputKind, enumerable: false });
+  Object.defineProperty(settings, "displayName", { value: displayName, enumerable: false });
+  Object.defineProperty(settings, "imageSlots", { value: imageSlotsFor(selected, inputKind), enumerable: false });
   Object.defineProperty(settings, "promptCharacterLimit", { value: options.promptCharacterLimit, enumerable: false });
   return settings;
 }
@@ -885,15 +1066,18 @@ async function handleQueue(req, res) {
       requestBody.image_url = sourceMedia.dataUrl;
       requestBody.end_image_url = endMedia.dataUrl;
     } else if (settings.inputKind === "reference") {
-      const referenceTokens = Array.isArray(input.referenceMediaTokens) ? input.referenceMediaTokens.slice(0, MAX_REFERENCE_IMAGES - 1) : [];
+      const referenceTokens = Array.isArray(input.referenceMediaTokens) ? input.referenceMediaTokens.slice(0, settings.imageSlots - 1) : [];
       const references = [sourceMedia, ...referenceTokens.map((token) => uploads.get(token))];
       if (references.some((media) => !media || media.kind !== "image")) return json(res, 410, { error: expiredMessage });
-      const extras = references.slice(1).map((media) => media.dataUrl);
-      if (settings.model.includes("kling") && settings.model.includes("reference-to-video")) {
-        const element = { frontal_image_url: sourceMedia.dataUrl };
-        if (extras.length) element.reference_image_urls = extras.slice(0, 3);
-        requestBody.elements = [element];
-        requestBody.prompt = prompt.includes("@Element1") ? prompt : `@Element1, ${prompt}`;
+      const scheme = referenceSchemeFor(settings.model);
+      requestBody.prompt = bindReferenceTags(prompt, scheme.label, references.length);
+      if (requestBody.prompt.length > settings.promptCharacterLimit) {
+        return json(res, 400, { error: `Tagging the reference images pushes this description past ${settings.displayName}'s ${settings.promptCharacterLimit.toLocaleString()} character limit. Shorten it a little.` });
+      }
+      if (scheme.scheme === "elements") {
+        // Kling addresses each subject separately, so every upload becomes its own
+        // element and @image2 in the console arrives as @Element2 on the wire.
+        requestBody.elements = references.map((media) => ({ frontal_image_url: media.dataUrl }));
       } else {
         requestBody.reference_image_urls = references.map((media) => media.dataUrl);
       }
